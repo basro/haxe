@@ -1078,6 +1078,7 @@ let run com tctx main =
 	(* PASS 1: general expression filters *)
 	let filters = [
 		AbstractCast.handle_abstract_casts tctx;
+		Optimizer.basro_flatten_filter tctx;
 		Optimizer.inline_constructors tctx;
 		check_local_vars_init;
 		Optimizer.reduce_expression tctx;

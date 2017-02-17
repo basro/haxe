@@ -1140,6 +1140,101 @@ let rec make_constant_expression ctx ?(concat_strings=false) e =
 (* ---------------------------------------------------------------------- *)
 (* INLINE CONSTRUCTORS *)
 
+
+let rec basro_flatten_expr ctx e =
+	let rec loop e =
+		let is_void t = match follow t with
+			| TAbstract({a_path=[],"Void"},_) -> true
+			| _ -> false
+		in
+		let is_void = is_void e.etype in
+		let finalize child_results e = 
+			if is_void then
+				(child_results @ [e], None)
+			else
+				let v = alloc_var "bastmp" e.etype e.epos in
+				let new_vare = mk (TVar(v,Some e)) ctx.t.tvoid e.epos in
+				let new_locale = mk (TLocal v) v.v_type e.epos in
+				(child_results @ [new_vare], Some new_locale)
+		in
+		match e.eexpr with
+		| TField(e, f) -> 
+			let re, Some loc = loop e in
+			let new_e = mk (TField(loc, f)) e.etype e.epos in
+			finalize re new_e
+		| TBlock(el) ->
+			let child_results, local = List.fold_left (fun (elacc, _) e -> let (el, loc) = loop e in (elacc @ el, loc)) ([],None) el in
+			(child_results, local)
+		| TParenthesis(e) ->
+			loop e
+		| TConst(c) ->
+			([], Some e)
+		| TTypeExpr(_) ->
+			([], Some e)
+		| TLocal(_) ->
+			([], Some e)
+		| TMeta(_,e) ->
+			loop e
+		| TBinop(OpAssign as op, e1, e2) ->
+			let child_results, Some loc2 = loop e2 in
+			let newe = mk (TBinop(op, e1, loc2)) e.etype e.epos in
+			finalize child_results newe
+		| TVar(v, eo) ->
+			let child_results, local = match eo with 
+				| Some eo -> loop eo
+				| None -> ([],None)
+			in
+			let newe = mk (TVar(v, local)) ctx.t.tvoid e.epos in
+			finalize child_results newe
+		| TNew(c, types, argel) ->
+			let child_results, argvars = List.split (List.map loop argel) in
+			let child_results = List.flatten child_results in
+			let argvars = List.map (fun e -> let Some e = e in e) argvars in
+			let new_calle = mk (TNew(c, types, argvars)) e.etype e.epos in
+			finalize child_results new_calle
+		| TCall(fune,argel) ->
+			(* prerr_endline (Type.s_type_kind e.etype); *)
+			begin if is_void then prerr_endline "is_void" else prerr_endline "isnt void" end;
+			(* prerr_endline (Type.s_expr Type.Printer.s_type e); *)
+			let feresults, Some fevar = loop fune in
+			let arresults, argvars = List.split (List.map loop argel) in
+			let arresults = List.flatten arresults in
+			let argvars = List.map (fun e -> let Some e = e in e) argvars in
+			let child_results = feresults @ arresults in
+			let new_calle = mk (TCall(fevar, argvars)) e.etype e.epos in
+			finalize child_results new_calle
+		| _ ->
+			prerr_endline "****** hueh ***************************";
+			prerr_endline "****** hueh ***************************";
+			prerr_endline (Type.s_expr Type.Printer.s_type e);
+			let e = Type.map_expr (basro_flatten_expr ctx) e in
+			finalize [] e
+	in let results, olocal = loop e in
+	let is_useless_local e = match e.eexpr with
+			| TLocal(_) -> true
+			| _ -> false
+		in
+	let filter_useless_locals el = List.filter (fun e -> not (is_useless_local e)) el in
+	let results = filter_useless_locals results in
+	match results, olocal with
+		| [], Some local -> local
+		| [], None -> mk (TBlock []) e.etype e.epos
+		| [{eexpr = TVar(_, Some e)}], _ -> e
+		| _, Some local -> mk (TBlock (results @ [local])) e.etype e.epos
+		| _, None -> mk (TBlock results) e.etype e.epos
+
+let basro_flatten_filter ctx e =
+	let rec loop e = match e.eexpr with
+	| TParenthesis({eexpr = TParenthesis(e)}) ->
+		prerr_endline (Type.s_expr Type.Printer.s_type e);
+		let result = basro_flatten_expr ctx e in 
+		prerr_endline "\n->\n";
+		prerr_endline (Type.s_expr Type.Printer.s_type result);
+		result
+	| _ -> Type.map_expr loop e
+	in loop e
+
+
 (*
 	First pass :
 	We will look at local variables in the form   var v = new ....
@@ -1154,15 +1249,18 @@ type inline_info_kind =
 	| IKCtor of tclass_field * bool
 	| IKStructure
 	| IKArray of int
+	| IKReference of inline_info
 
-type inline_info = {
+and inline_info = {
 	ii_var : tvar;
 	ii_expr : texpr;
 	ii_kind : inline_info_kind;
+	ii_depth : int;
+	mutable ii_referenced : bool;
 	mutable ii_fields : (string,tvar) PMap.t;
 }
 
-let inline_constructors ctx e =
+let inline_constructors ctx e = let originale = e in
 	let vars = ref IntMap.empty in
 	let is_valid_ident s =
 		try
@@ -1181,7 +1279,7 @@ let inline_constructors ctx e =
 		with Exit ->
 			false
 	in
-	let cancel v p =
+	let rec cancel v p =
 		try
 			let ii = IntMap.find v.v_id !vars in
 			vars := IntMap.remove v.v_id !vars;
@@ -1190,18 +1288,22 @@ let inline_constructors ctx e =
 				| IKCtor(cf,true) ->
 					display_error ctx "Extern constructor could not be inlined" p;
 					error "Variable is used here" p;
+				| IKReference ii2 ->
+					cancel ii2.ii_var p;
 				| _ ->
 					()
 			end;
 		with Not_found ->
 			()
 	in
-	let add v e kind =
+	let add v e kind depth =
 		let ii = {
 			ii_var = v;
 			ii_fields = PMap.empty;
 			ii_expr = e;
-			ii_kind = kind
+			ii_kind = kind;
+			ii_depth = depth;
+			ii_referenced = false
 		} in
 		v.v_id <- -v.v_id;
 		vars := IntMap.add v.v_id ii !vars;
@@ -1210,83 +1312,91 @@ let inline_constructors ctx e =
 		let ii = IntMap.find v.v_id !vars in
 		PMap.find s ii.ii_fields
 	in
-	let add_field_var v s t =
+	let rec add_field_var v s t =
 		let ii = IntMap.find v.v_id !vars in
+		begin match ii.ii_kind with
+			| IKReference ii2 -> ignore(add_field_var ii2.ii_var s t)
+			| _ -> ()
+		end;
 		let v' = alloc_var (Printf.sprintf "%s_%s" v.v_name s) t v.v_pos in
 		v'.v_meta <- (Meta.InlineConstructorVariable,[],v.v_pos) :: v'.v_meta;
 		ii.ii_fields <- PMap.add s v' ii.ii_fields;
 		v'
 	in
+
 	let int_field_name i =
 		if i < 0 then "n" ^ (string_of_int (-i))
 		else (string_of_int i)
 	in
 	let is_extern_ctor c cf = c.cl_extern || Meta.has Meta.Extern cf.cf_meta in
-	let rec find_locals e = match e.eexpr with
-		| TVar(v,Some e1) ->
-			find_locals e1;
-			let rec loop el_init e1 = match e1.eexpr with
-				| TBlock el ->
-					begin match List.rev el with
-					| e1 :: el ->
-						loop (el @ el_init) e1
-					| [] ->
-						()
-					end
-				| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl) when type_iseq v.v_type e1.etype ->
-					begin match type_inline ctx cf tf (mk (TLocal v) (TInst (c,tl)) e1.epos) pl ctx.t.tvoid None e1.epos true with
-					| Some e ->
-						(* add field inits here because the filter has not run yet (issue #2336) *)
-						let ev = mk (TLocal v) v.v_type e.epos in
-						let el_init = List.fold_left (fun acc cf -> match cf.cf_kind,cf.cf_expr with
-							| Var _,Some e ->
-								let ef = mk (TField(ev,FInstance(c,tl,cf))) cf.cf_type e.epos in
-								let e = mk (TBinop(OpAssign,ef,e)) cf.cf_type e.epos in
-								e :: acc
-							| _ -> acc
-						) el_init c.cl_ordered_fields in
-						let e' = match el_init with
-							| [] -> e
-							| _ -> mk (TBlock (List.rev (e :: el_init))) e.etype e.epos
-						in
-						add v e' (IKCtor(cf,is_extern_ctor c cf));
-						find_locals e
-					| None ->
-						()
-					end
-				| TObjectDecl fl when fl <> [] ->
-					begin try
-						let ev = mk (TLocal v) v.v_type e.epos in
-						let el = List.fold_left (fun acc (s,e) ->
-							if not (is_valid_ident s) then raise Exit;
-							let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
-							let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
-							e :: acc
-						) el_init fl in
-						let e = mk (TBlock (List.rev el)) ctx.t.tvoid e.epos in
-						add v e IKStructure
-					with Exit ->
-						()
-					end
-				| TArrayDecl el ->
-					let ev = mk (TLocal v) v.v_type e.epos in
-					let el,_ = List.fold_left (fun (acc,i) e ->
-						let ef = mk (TField(ev,FDynamic (string_of_int i))) e.etype e.epos in
-						let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
-						e :: acc,i + 1
-					) (el_init,0) el in
-					let e = mk (TBlock (List.rev el)) ctx.t.tvoid e.epos in
-					add v e (IKArray (List.length el))
-				| TCast(e1,None) | TParenthesis e1 ->
-					loop el_init e1
-				| _ ->
-					()
-			in
-			loop [] e1
-		| TBinop(OpAssign,({eexpr = TField({eexpr = TLocal v},fa)} as e1),e2) when v.v_id < 0 ->
-			let s = field_name fa in
-			(try ignore(get_field_var v s) with Not_found -> ignore(add_field_var v s e1.etype));
-			find_locals e2
+	let rec strip_meta e = match e.eexpr with
+		| TMeta(_, e) -> strip_meta e
+		| _ -> e
+	in
+	let rec find_locals2 depth e = begin
+		let e = strip_meta e in
+		let continue e = Type.iter (find_locals2 depth) e in
+		match e.eexpr with
+		| TVar(v, Some ({eexpr = TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl)} as e))
+			when type_iseq v.v_type e.etype ->
+			begin match type_inline ctx cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl ctx.t.tvoid None e.epos true with
+			| Some e ->
+				(* add field inits here because the filter has not run yet (issue #2336) *)
+				let ev = mk (TLocal v) v.v_type e.epos in
+				let el_init = List.fold_left (fun acc cf -> match cf.cf_kind,cf.cf_expr with
+					| Var _,Some e ->
+						let ef = mk (TField(ev,FInstance(c,tl,cf))) cf.cf_type e.epos in
+						let e = mk (TBinop(OpAssign,ef,e)) cf.cf_type e.epos in
+						e :: acc
+					| _ -> acc
+				) [] c.cl_ordered_fields in
+				let e' = match el_init with
+					| [] -> e
+					| _ -> mk (TBlock (List.rev (e :: el_init))) e.etype e.epos
+				in
+				add v e' (IKCtor(cf,is_extern_ctor c cf)) depth;
+				continue e
+			| None ->
+				()
+			end; continue e
+		| TVar(v, Some {eexpr = TObjectDecl fl}) when fl <> [] ->
+			begin try
+				let ev = mk (TLocal v) v.v_type e.epos in
+				let el = List.fold_left (fun acc (s,e) ->
+					if not (is_valid_ident s) then raise Exit;
+					let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
+					let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
+					e :: acc
+				) [] fl in
+				let e = mk (TBlock (List.rev el)) ctx.t.tvoid e.epos in
+				add v e IKStructure depth
+			with Exit ->
+				()
+			end; continue e
+		| TVar(v, Some {eexpr = TArrayDecl el}) ->
+			begin
+			let ev = mk (TLocal v) v.v_type e.epos in
+			let el,_ = List.fold_left (fun (acc,i) e ->
+				let ef = mk (TField(ev,FDynamic (string_of_int i))) e.etype e.epos in
+				let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
+				e :: acc,i + 1
+			) ([],0) el in
+			let e = mk (TBlock (List.rev el)) ctx.t.tvoid e.epos in
+			add v e (IKArray (List.length el)) depth
+			end; continue e
+		| TVar(dstv, Some {eexpr = TLocal srcv}) when srcv.v_id < 0 ->
+			prerr_endline "Ref detected..";
+			let s_var v = v.v_name ^ ":" ^ string_of_int v.v_id ^ if v.v_capture then "[c]" else "" in
+			prerr_endline (s_var srcv);
+			let ii = IntMap.find srcv.v_id !vars in
+			if ii.ii_referenced || ii.ii_depth <> depth then
+				cancel srcv e.epos
+			else begin
+				ii.ii_referenced <- true;
+				add dstv (mk (TBlock []) ctx.t.tvoid e.epos) (IKReference ii) depth;
+				prerr_endline "Made ref..";
+				prerr_endline (s_var dstv);
+			end
 		| TField({eexpr = TLocal v},fa) when v.v_id < 0 ->
 			begin match extract_field fa with
 			| Some ({cf_kind = Var _} as cf) ->
@@ -1300,7 +1410,7 @@ let inline_constructors ctx e =
 					| _ -> (try ignore(get_field_var v cf.cf_name) with Not_found -> ignore(add_field_var v cf.cf_name e.etype));
 					end
 			| _ -> cancel v e.epos
-			end
+			end;
 		| TArray({eexpr = TLocal v},{eexpr = TConst (TInt i)}) when v.v_id < 0 ->
 			let i = Int32.to_int i in
 			begin try
@@ -1316,14 +1426,22 @@ let inline_constructors ctx e =
 		| TLocal v when v.v_id < 0 ->
 			cancel v e.epos;
 		| _ ->
-			Type.iter find_locals e
-	in
-	find_locals e;
+			Type.iter (find_locals2 (depth+1)) e;
+	end
+	in find_locals2 0 e;
 	(* Pass 2 *)
 	let inline v p =
 		try
 			let ii = IntMap.find v.v_id !vars in
-			let el = PMap.fold (fun v acc -> (mk (TVar(v,None)) ctx.t.tvoid p) :: acc) ii.ii_fields [] in
+			let el = match ii.ii_kind with
+				| IKReference ii2 -> 
+					let re s =
+						let fv = get_field_var ii2.ii_var s in (*TODO: Optimize this, no need to use ii_var*)
+						mk (TLocal fv) fv.v_type p
+					in
+					PMap.foldi (fun s v acc -> (mk (TVar(v,Some(re s) )) ctx.t.tvoid p) :: acc) ii.ii_fields []
+				| _ -> PMap.fold (fun v acc -> (mk (TVar(v,None)) ctx.t.tvoid p) :: acc) ii.ii_fields []
+			in
 			let e = {ii.ii_expr with eexpr = TBlock (el @ [ii.ii_expr])} in
 			Some e
 		with Not_found ->
@@ -1364,6 +1482,7 @@ let inline_constructors ctx e =
 		let e = mk (TBlock (List.rev !el)) e.etype e.epos in
 		mk (TMeta((Meta.MergeBlock,[],e.epos),e)) e.etype e.epos
 	in
+	let fucked_up = ref false in
 	let rec loop e = match e.eexpr with
 		| TVar(v,_) when v.v_id < 0 ->
 			begin match inline v e.epos with
@@ -1400,12 +1519,21 @@ let inline_constructors ctx e =
 			let el = block [] el in
 			mk (TBlock (List.rev el)) e.etype e.epos
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction _})} as cf)} as c,_,_) when is_extern_ctor c cf ->
+			prerr_endline (Type.s_expr Type.Printer.s_type originale);
 			display_error ctx "Extern constructor could not be inlined" e.epos;
+			Type.map_expr loop e
+		| TLocal(v) when v.v_id < 0 ->
+			fucked_up := true; 
 			Type.map_expr loop e
 		| _ ->
 			Type.map_expr loop e
 	in
-	loop e
+	let e = loop e in
+	if !fucked_up then begin
+		prerr_endline "****** FUCKED ***************************";
+		prerr_endline "****** UP *******************************";
+		prerr_endline (Type.s_expr Type.Printer.s_type e);
+	end; e
 
 (* ---------------------------------------------------------------------- *)
 (* COMPLETION *)
