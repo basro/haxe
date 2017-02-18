@@ -1140,6 +1140,57 @@ let rec make_constant_expression ctx ?(concat_strings=false) e =
 (* ---------------------------------------------------------------------- *)
 (* INLINE CONSTRUCTORS *)
 
+let rec basro_flatten_expr2 ctx e =
+	let rec loop e =
+		let is_basic_exp e = match e.eexpr with
+			| TConst(_) | TTypeExpr(_) | TLocal(_) -> true
+			| _ -> false
+		in
+		let discard_result el = match el with
+			| e::el when is_basic_exp e -> el
+			| _ -> el
+		in
+		let get_result el = match el with
+			| e::el when is_basic_exp e ->
+				(e, el)
+			| e::el ->
+				let v = alloc_var "flat" e.etype e.epos in
+				let decl = mk (TVar(v,Some e)) ctx.t.tvoid e.epos in
+				let loc = mk (TLocal v) v.v_type e.epos in
+				(loc, decl :: el)
+			| _ ->
+				raise Not_found
+		in
+		match e.eexpr with
+		| TMeta(_,e) |TParenthesis(e) ->
+			loop e
+		| TConst(_) | TTypeExpr(_) | TLocal(_) ->
+			[e]
+		| TBlock(el) ->
+			let rl = match List.rev_map loop el with
+				| r :: rl -> (r :: (List.map discard_result rl))
+				| _ -> []
+			in List.flatten rl
+		| TCall(f, args) ->
+			let f, frl = get_result (loop f) in
+			let maparg arg = get_result (loop arg) in
+			let args, argrl = List.split (List.map maparg args) in
+			let argrl = List.flatten(List.rev argrl) in
+			let newe = mk (TCall(f, args)) e.etype e.epos in
+			(newe :: (argrl @ frl))
+		| TVar(v, Some e) ->
+			let e, erl = get_result	(loop e) in
+			let newe = mk (TVar(v,Some e)) ctx.t.tvoid e.epos in
+			(newe :: erl)
+		| TVar(v, None) ->
+			[e]
+		| _ ->
+			[Type.map_expr (basro_flatten_expr2 ctx) e]
+	in
+	begin match (loop e) with
+	| [e] -> e
+	| el -> mk (TBlock (List.rev el)) e.etype e.epos
+	end
 
 let rec basro_flatten_expr ctx e =
 	let rec loop e =
@@ -1227,7 +1278,7 @@ let basro_flatten_filter ctx e =
 	let rec loop e = match e.eexpr with
 	| TParenthesis({eexpr = TParenthesis(e)}) ->
 		prerr_endline (Type.s_expr Type.Printer.s_type e);
-		let result = basro_flatten_expr ctx e in 
+		let result = basro_flatten_expr2 ctx e in 
 		prerr_endline "\n->\n";
 		prerr_endline (Type.s_expr Type.Printer.s_type result);
 		result
