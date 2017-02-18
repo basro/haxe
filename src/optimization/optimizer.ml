@@ -1382,8 +1382,12 @@ let inline_constructors ctx e =
 		else (string_of_int i)
 	in
 	let is_extern_ctor c cf = c.cl_extern || Meta.has Meta.Extern cf.cf_meta in
-	let rec find_locals captured e = match e.eexpr with
-		| TVar(v,Some e1) ->
+	let uninitialized_vars = ref IntSet.empty in
+	let is_var_uninitialized v = IntSet.mem (abs v.v_id) !uninitialized_vars in
+	let add_uninitialized_var v = (uninitialized_vars := IntSet.add (abs v.v_id) !uninitialized_vars) in
+	let remove_uninitialized_var v = (uninitialized_vars := IntSet.remove (abs v.v_id) !uninitialized_vars) in
+	let rec find_locals captured e =
+		let capture_inline v e1 = 
 			find_locals true e1;
 			let rec loop el_init e1 = match e1.eexpr with
 				| TBlock el ->
@@ -1448,6 +1452,15 @@ let inline_constructors ctx e =
 					()
 			in
 			loop [] e1
+		in
+		match e.eexpr with
+		| TVar(v,None) -> add_uninitialized_var v
+		| TBinop(OpAssign, {eexpr = TLocal(v)}, srce) when is_var_uninitialized v ->
+			capture_inline v srce;
+			if not (is_var_uninitialized v) then cancel v e.epos;
+			remove_uninitialized_var v
+		| TVar(v,Some e1) ->
+			capture_inline v e1
 		| TBinop(OpAssign,({eexpr = TField({eexpr = TLocal v},fa)} as e1),e2) when v.v_id < 0 ->
 			let s = field_name fa in
 			(try ignore(get_field_var v s) with Not_found -> ignore(add_field_var v s e1.etype));
