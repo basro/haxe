@@ -1279,6 +1279,17 @@ let inline_constructors ctx e = let originale = e in
 		with Exit ->
 			false
 	in
+	let unassigned_vars = ref IntSet.empty in
+	let real_var_id v = if v.v_id < 0 then -v.v_id else v.v_id in
+	let var_declared_unassigned v =
+		unassigned_vars := IntSet.add v.v_id !unassigned_vars;
+	in
+	let var_assigned v = 
+		unassigned_vars := IntSet.remove (real_var_id v) !unassigned_vars;
+	in
+	let is_var_unassigned v =
+		IntSet.mem (real_var_id v) !unassigned_vars
+	in
 	let rec cancel v p =
 		try
 			let ii = IntMap.find v.v_id !vars in
@@ -1308,22 +1319,36 @@ let inline_constructors ctx e = let originale = e in
 		v.v_id <- -v.v_id;
 		vars := IntMap.add v.v_id ii !vars;
 	in
+	let get_ii v = IntMap.find v.v_id !vars in
+	let get_field_ii ii s = PMap.find s ii.ii_fields in
 	let get_field_var v s =
-		let ii = IntMap.find v.v_id !vars in
-		PMap.find s ii.ii_fields
+		let ii = get_ii v in
+		let ii = match ii.ii_kind with
+			| IKReference ii -> ii
+			| _ -> ii
+		in
+		get_field_ii ii s
 	in
-	let rec add_field_var v s t =
-		let ii = IntMap.find v.v_id !vars in
-		begin match ii.ii_kind with
-			| IKReference ii2 -> ignore(add_field_var ii2.ii_var s t)
-			| _ -> ()
-		end;
+	let add_field_ii ii s t =
+		let v = ii.ii_var in
 		let v' = alloc_var (Printf.sprintf "%s_%s" v.v_name s) t v.v_pos in
 		v'.v_meta <- (Meta.InlineConstructorVariable,[],v.v_pos) :: v'.v_meta;
 		ii.ii_fields <- PMap.add s v' ii.ii_fields;
 		v'
 	in
-
+	let add_field_var v s t =
+		let ii = IntMap.find v.v_id !vars in
+		add_field_ii ii s t
+	in
+	let field_used v vfield vtype pos =
+		let ii = get_ii v in
+		let ii = match ii.ii_kind with
+			| IKArray _ -> cancel v pos; ii (* TODO "length" ??? *)
+			| IKReference ii -> ii
+			| _ -> ii
+		in 
+		try ignore(get_field_ii ii vfield) with Not_found -> ignore(add_field_ii ii vfield vtype)
+	in
 	let int_field_name i =
 		if i < 0 then "n" ^ (string_of_int (-i))
 		else (string_of_int i)
@@ -1385,30 +1410,20 @@ let inline_constructors ctx e = let originale = e in
 			add v e (IKArray (List.length el)) depth
 			end; continue e
 		| TVar(dstv, Some {eexpr = TLocal srcv}) when srcv.v_id < 0 ->
-			prerr_endline "Ref detected..";
 			let s_var v = v.v_name ^ ":" ^ string_of_int v.v_id ^ if v.v_capture then "[c]" else "" in
+			prerr_endline "Ref detected..";
 			prerr_endline (s_var srcv);
 			let ii = IntMap.find srcv.v_id !vars in
-			if ii.ii_referenced || ii.ii_depth <> depth then
-				cancel srcv e.epos
-			else begin
-				ii.ii_referenced <- true;
-				add dstv (mk (TBlock []) ctx.t.tvoid e.epos) (IKReference ii) depth;
-				prerr_endline "Made ref..";
-				prerr_endline (s_var dstv);
-			end
+			let root = match ii.ii_kind with
+				| IKReference ii -> ii
+				| _ -> ii
+			in
+			ii.ii_referenced <- true;
+			add dstv (mk (TBlock []) ctx.t.tvoid e.epos) (IKReference root) depth;
 		| TField({eexpr = TLocal v},fa) when v.v_id < 0 ->
 			begin match extract_field fa with
 			| Some ({cf_kind = Var _} as cf) ->
-				(* Arrays are not supposed to have public var fields, besides "length" (which we handle when inlining),
-				   however, its inlined methods may generate access to private implementation fields (such as internal
-				   native array), in this case we have to cancel inlining.
-				*)
-				if cf.cf_name <> "length" then
-					begin match (IntMap.find v.v_id !vars).ii_kind with
-					| IKArray _ -> cancel v e.epos
-					| _ -> (try ignore(get_field_var v cf.cf_name) with Not_found -> ignore(add_field_var v cf.cf_name e.etype));
-					end
+				field_used v cf.cf_name e.etype e.epos
 			| _ -> cancel v e.epos
 			end;
 		| TArray({eexpr = TLocal v},{eexpr = TConst (TInt i)}) when v.v_id < 0 ->
@@ -1423,6 +1438,23 @@ let inline_constructors ctx e = let originale = e in
 			with Not_found ->
 				cancel v e.epos
 			end
+		| TVar(v, None) ->
+			var_declared_unassigned v
+		| TBinop(OpAssign, {eexpr = TLocal v}, srce) ->
+			if v.v_id < 0 then cancel v e.epos;
+			let unassigned = is_var_unassigned v in
+			var_assigned v;
+			begin match srce.eexpr with
+			| TLocal srcv when srcv.v_id < 0 ->
+				if not unassigned then cancel srcv srce.epos;
+				let ii = IntMap.find srcv.v_id !vars in
+				let root = match ii.ii_kind with
+					| IKReference ii -> ii
+					| _ -> ii
+				in
+				add v (mk (TBlock []) ctx.t.tvoid e.epos) (IKReference root) depth;
+			| _ -> continue srce
+			end
 		| TLocal v when v.v_id < 0 ->
 			cancel v e.epos;
 		| _ ->
@@ -1430,25 +1462,18 @@ let inline_constructors ctx e = let originale = e in
 	end
 	in find_locals2 0 e;
 	(* Pass 2 *)
-	let inline v p =
-		try
-			let ii = IntMap.find v.v_id !vars in
-			let el = match ii.ii_kind with
-				| IKReference ii2 -> 
-					let re s =
-						let fv = get_field_var ii2.ii_var s in (*TODO: Optimize this, no need to use ii_var*)
-						mk (TLocal fv) fv.v_type p
-					in
-					PMap.foldi (fun s v acc -> (mk (TVar(v,Some(re s) )) ctx.t.tvoid p) :: acc) ii.ii_fields []
-				| _ -> PMap.fold (fun v acc -> (mk (TVar(v,None)) ctx.t.tvoid p) :: acc) ii.ii_fields []
-			in
-			let e = {ii.ii_expr with eexpr = TBlock (el @ [ii.ii_expr])} in
-			Some e
-		with Not_found ->
-			None
+	let inline_var_decl v p =
+		let ii = IntMap.find v.v_id !vars in
+		begin match ii.ii_kind with
+		| IKReference ii2 ->
+			mk (TBlock []) ctx.t.tvoid p
+		| _ ->
+			let el = PMap.fold (fun v acc -> (mk (TVar(v,None)) ctx.t.tvoid p) :: acc) ii.ii_fields [] in
+			{ii.ii_expr with eexpr = TBlock (el @ [ii.ii_expr])}
+		end
 	in
 	let assign_or_declare v name e2 t p =
-		 try
+		try
 			let v = get_field_var v name in
 			let e1 = mk (TLocal v) t p in
 			mk (TBinop(OpAssign,e1,e2)) e1.etype p
@@ -1485,14 +1510,9 @@ let inline_constructors ctx e = let originale = e in
 	let fucked_up = ref false in
 	let rec loop e = match e.eexpr with
 		| TVar(v,_) when v.v_id < 0 ->
-			begin match inline v e.epos with
-			| Some e ->
-				let e = flatten e in
-				loop e
-			| None ->
-				cancel v e.epos;
-				e
-			end
+			inline_var_decl v e.epos
+		| TBinop(OpAssign,{eexpr = TLocal v},_) when v.v_id < 0 ->
+			mk (TBlock []) ctx.t.tvoid e.epos
 		| TBinop(OpAssign,({eexpr = TField({eexpr = TLocal v},fa)} as e1),e2) when v.v_id < 0 ->
 			let e2 = loop e2 in
 			assign_or_declare v (field_name fa) e2 e1.etype e.epos
