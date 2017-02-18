@@ -1444,8 +1444,9 @@ let inline_constructors ctx e =
 					add v e (IKArray (List.length el))
 				| TCast(e1,None) | TParenthesis e1 ->
 					loop el_init e1
+				| TBinop(OpAssign, {eexpr = TLocal(v2)}, _)
 				| TLocal v2 when v2.v_id < 0 ->
-					ctx.com.warning "Alias detected" v2.v_pos;
+					ctx.com.warning "Alias detected" e.epos;
 					let e = mk (TBlock (List.rev el_init)) ctx.t.tvoid e.epos in
 					add v e (IKAlias v2)
 				| _ ->
@@ -1493,6 +1494,12 @@ let inline_constructors ctx e =
 			end
 		| TLocal v when v.v_id < 0 && not captured ->
 			cancel v e.epos;
+		| TBlock(el) ->
+			let rec loop = function
+				| e1::e2::el -> find_locals true e1; loop (e2::el)
+				| [e] -> find_locals captured e
+				| _ -> ()
+			in loop el
 		| TBlock _ | TParenthesis _ | TCast _ ->
 			Type.iter (find_locals captured) e
 		| _ ->
@@ -1507,17 +1514,31 @@ let inline_constructors ctx e =
 	vars := IntMap.filter is_ref_alive !vars;
 
 	(* Pass 2 *)
-	let inline v p =
-		try
-			let ii = get_ii v in
-			let el = match ii.ii_kind with
-				| IKAlias _ -> []
-				| _ -> PMap.fold (fun v acc -> (mk (TVar(v,None)) ctx.t.tvoid p) :: acc) !(ii.ii_fields) []
-			in
-			let e = {ii.ii_expr with eexpr = TBlock (el @ [ii.ii_expr])} in
-			Some e
-		with Not_found ->
-			None
+	let flatten e =
+		let el = ref [] in
+		let rec loop e = match e.eexpr with
+			| TBlock el ->
+				List.iter loop el
+			| _ ->
+				el := e :: !el
+		in
+		loop e;
+		let e = mk (TBlock (List.rev !el)) e.etype e.epos in
+		mk (TMeta((Meta.MergeBlock,[],e.epos),e)) e.etype e.epos
+	in
+	let inline_var_decl v p init =
+		let ii = get_ii v in
+		let el = match ii.ii_kind with
+			| IKAlias _ -> []
+			| _ -> PMap.fold (fun v acc -> (mk (TVar(v,None)) ctx.t.tvoid p) :: acc) !(ii.ii_fields) []
+		in
+		let el = if init then el @ [ii.ii_expr] else el in
+		let e = {ii.ii_expr with eexpr = TBlock (el)} in
+		flatten e
+	in
+	let inline_var_init v p =
+		let ii = get_ii v in
+		flatten ii.ii_expr
 	in
 	let assign_or_declare v name e2 t p =
 		 try
@@ -1542,28 +1563,16 @@ let inline_constructors ctx e =
 		with Not_found ->
 			mk (TConst TNull) t p
 	in
-	let flatten e =
-		let el = ref [] in
-		let rec loop e = match e.eexpr with
-			| TBlock el ->
-				List.iter loop el
-			| _ ->
-				el := e :: !el
-		in
-		loop e;
-		let e = mk (TBlock (List.rev !el)) e.etype e.epos in
-		mk (TMeta((Meta.MergeBlock,[],e.epos),e)) e.etype e.epos
-	in
 	let rec loop e = match e.eexpr with
-		| TVar(v,_) when v.v_id < 0 ->
-			begin match inline v e.epos with
-			| Some e ->
-				let e = flatten e in
-				loop e
-			| None ->
-				cancel v e.epos;
-				e
-			end
+		| TBinop(OpAssign, {eexpr = TLocal(v)}, _) when v.v_id < 0 ->
+			let e = inline_var_init v e.epos in
+			loop e
+		| TVar(v,None) when v.v_id < 0 ->
+			let e = inline_var_decl v e.epos false in
+			loop e
+		| TVar(v,Some _) when v.v_id < 0 ->
+			let e = inline_var_decl v e.epos true in
+			loop e
 		| TBinop(OpAssign,({eexpr = TField({eexpr = TLocal v},fa)} as e1),e2) when v.v_id < 0 ->
 			let e2 = loop e2 in
 			assign_or_declare v (field_name fa) e2 e1.etype e.epos
@@ -1579,6 +1588,7 @@ let inline_constructors ctx e =
 			let rec block acc el = match el with
 				| e1 :: el ->
 					begin match loop e1 with
+					| {eexpr = TLocal(v)} when v.v_id < 0 -> block acc el (* TODO: Explain why this is needed *)
 					| {eexpr = TMeta((Meta.MergeBlock,_,_),{eexpr = TBlock el2})} ->
 						let acc = block acc el2 in
 						block acc el
@@ -1596,13 +1606,13 @@ let inline_constructors ctx e =
 			Type.map_expr loop e
 	in
 	let e = loop e in
-	if !doneit then begin 
+	(*if !doneit then begin 
 		prerr_endline " ";
 		prerr_endline "------------------------";
 		prerr_endline (Type.s_expr Type.Printer.s_type e);
 		prerr_endline "------------------------";
 		prerr_endline " ";
-	end; e
+	end;*) e
 
 (* ---------------------------------------------------------------------- *)
 (* COMPLETION *)
