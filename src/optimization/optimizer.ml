@@ -1509,7 +1509,7 @@ let inline_constructors ctx e =
 				| [e] -> find_locals captured e
 				| _ -> ()
 			in loop el
-		| TBlock _ | TParenthesis _ | TCast _ ->
+		| TBlock _ | TParenthesis _ | TCast (_,None) ->
 			Type.iter (find_locals captured) e
 		| _ ->
 			Type.iter (find_locals false) e
