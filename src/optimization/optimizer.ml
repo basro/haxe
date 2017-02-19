@@ -1382,6 +1382,11 @@ let inline_constructors ctx e =
 		else (string_of_int i)
 	in
 	let is_extern_ctor c cf = c.cl_extern || Meta.has Meta.Extern cf.cf_meta in
+	let rec get_inlined_var e = match e.eexpr with
+		| TLocal(v) when v.v_id < 0 -> Some v
+		| TCast(e,None) | TParenthesis(e) -> get_inlined_var e
+		| _ -> None
+	in
 	let uninitialized_vars = ref IntSet.empty in
 	let is_var_uninitialized v = IntSet.mem (abs v.v_id) !uninitialized_vars in
 	let add_uninitialized_var v = (uninitialized_vars := IntSet.add (abs v.v_id) !uninitialized_vars) in
@@ -1397,7 +1402,7 @@ let inline_constructors ctx e =
 					| [] ->
 						()
 					end
-				| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl) when type_iseq v.v_type e1.etype ->
+				| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl) (* when type_iseq v.v_type e1.etype *)->
 					begin match type_inline ctx cf tf (mk (TLocal v) (TInst (c,tl)) e1.epos) pl ctx.t.tvoid None e1.epos true with
 					| Some e ->
 						(* add field inits here because the filter has not run yet (issue #2336) *)
@@ -1466,19 +1471,23 @@ let inline_constructors ctx e =
 			let s = field_name fa in
 			(try ignore(get_field_var v s) with Not_found -> ignore(add_field_var v s e1.etype));
 			find_locals false e2
-		| TField({eexpr = TLocal v},fa) when v.v_id < 0 ->
-			begin match extract_field fa with
-			| Some ({cf_kind = Var _} as cf) ->
-				(* Arrays are not supposed to have public var fields, besides "length" (which we handle when inlining),
-				   however, its inlined methods may generate access to private implementation fields (such as internal
-				   native array), in this case we have to cancel inlining.
-				*)
-				if cf.cf_name <> "length" then
-					begin match (IntMap.find v.v_id !vars).ii_kind with
-					| IKArray _ -> cancel v e.epos
-					| _ -> (try ignore(get_field_var v cf.cf_name) with Not_found -> ignore(add_field_var v cf.cf_name e.etype));
-					end
-			| _ -> cancel v e.epos
+		| TField(ee,fa) ->
+			begin match get_inlined_var ee with
+			| Some v ->
+				begin match extract_field fa with
+				| Some ({cf_kind = Var _} as cf) ->
+					(* Arrays are not supposed to have public var fields, besides "length" (which we handle when inlining),
+					   however, its inlined methods may generate access to private implementation fields (such as internal
+					   native array), in this case we have to cancel inlining.
+					*)
+					if cf.cf_name <> "length" then
+						begin match (IntMap.find v.v_id !vars).ii_kind with
+						| IKArray _ -> cancel v e.epos
+						| _ -> (try ignore(get_field_var v cf.cf_name) with Not_found -> ignore(add_field_var v cf.cf_name e.etype));
+						end
+				| _ -> cancel v e.epos
+				end
+			| _ -> Type.iter (find_locals false) e
 			end
 		| TArray({eexpr = TLocal v},{eexpr = TConst (TInt i)}) when v.v_id < 0 ->
 			let i = Int32.to_int i in
@@ -1577,8 +1586,12 @@ let inline_constructors ctx e =
 		| TBinop(OpAssign,({eexpr = TField({eexpr = TLocal v},fa)} as e1),e2) when v.v_id < 0 ->
 			let e2 = loop e2 in
 			assign_or_declare v (field_name fa) e2 e1.etype e.epos
-		| TField({eexpr = TLocal v},fa) when v.v_id < 0 ->
-			use_local_or_null v (field_name fa) e.etype e.epos
+		| TField(ee,fa) ->
+			begin match get_inlined_var ee with
+			| Some v ->
+				use_local_or_null v (field_name fa) e.etype e.epos
+			| _ -> Type.map_expr loop e
+			end
 		| TBinop(OpAssign,({eexpr = TArray({eexpr = TLocal v},{eexpr = TConst (TInt i)})} as e1),e2) when v.v_id < 0 ->
 			let e2 = loop e2 in
 			let name = int_field_name (Int32.to_int i) in
