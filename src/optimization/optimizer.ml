@@ -1507,12 +1507,16 @@ let inline_constructors ctx e =
 	in
 	find_locals false e;
 	(* Remove aliases with cancelled referenced variables *)
-	let is_ref_alive vid ii = match ii.ii_kind with 
-		| IKAlias v2 -> IntMap.mem v2.v_id !vars
+	begin vars := IntMap.filter (fun vid ii -> 
+		match ii.ii_kind with 
+		| IKAlias v2 -> if IntMap.mem v2.v_id !vars then true
+			else begin
+				ii.ii_var.v_id <- -ii.ii_var.v_id;
+				false
+			end
 		| _ -> true
-	in
-	vars := IntMap.filter is_ref_alive !vars;
-
+	) !vars
+	end;
 	(* Pass 2 *)
 	let flatten e =
 		let el = ref [] in
@@ -1565,14 +1569,11 @@ let inline_constructors ctx e =
 	in
 	let rec loop e = match e.eexpr with
 		| TBinop(OpAssign, {eexpr = TLocal(v)}, _) when v.v_id < 0 ->
-			let e = inline_var_init v e.epos in
-			loop e
+			loop (inline_var_init v e.epos)
 		| TVar(v,None) when v.v_id < 0 ->
-			let e = inline_var_decl v e.epos false in
-			loop e
+			loop (inline_var_decl v e.epos false);
 		| TVar(v,Some _) when v.v_id < 0 ->
-			let e = inline_var_decl v e.epos true in
-			loop e
+			loop (inline_var_decl v e.epos true);
 		| TBinop(OpAssign,({eexpr = TField({eexpr = TLocal v},fa)} as e1),e2) when v.v_id < 0 ->
 			let e2 = loop e2 in
 			assign_or_declare v (field_name fa) e2 e1.etype e.epos
