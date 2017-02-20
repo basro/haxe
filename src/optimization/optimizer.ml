@@ -1315,6 +1315,10 @@ type inline_info = {
 let inline_constructors ctx e =
 	let doneit = ref false in
 	let vars = ref IntMap.empty in
+	let uninitialized_vars = ref IntSet.empty in
+	let is_var_uninitialized v = IntSet.mem (abs v.v_id) !uninitialized_vars in
+	let add_uninitialized_var v = (uninitialized_vars := IntSet.add (abs v.v_id) !uninitialized_vars) in
+	let remove_uninitialized_var v = (uninitialized_vars := IntSet.remove (abs v.v_id) !uninitialized_vars) in
 	let is_valid_ident s =
 		try
 			if String.length s = 0 then raise Exit;
@@ -1373,6 +1377,7 @@ let inline_constructors ctx e =
 	let add_field_var v s t =
 		let ii = IntMap.find v.v_id !vars in
 		let v' = alloc_var (Printf.sprintf "%s_%s" v.v_name s) t v.v_pos in
+		add_uninitialized_var v';
 		v'.v_meta <- (Meta.InlineConstructorVariable,[],v.v_pos) :: v'.v_meta;
 		ii.ii_fields := PMap.add s v' !(ii.ii_fields);
 		v'
@@ -1397,18 +1402,6 @@ let inline_constructors ctx e =
 			end
 		| _ -> None
 	in
-	let shallow_map_to_inlined_var_local e = Type.map_expr (fun e -> 
-		let get_local v = mk (TLocal v) v.v_type e.epos in
-		Option.default e (Option.map get_local (get_inlined_var e true))
-	) e in
-	(* let uninitialized_vars = ref IntSet.empty in
-	let is_var_uninitialized v = IntSet.mem (abs v.v_id) !uninitialized_vars in
-	let add_uninitialized_var v = (uninitialized_vars := IntSet.add (abs v.v_id) !uninitialized_vars) in
-	let remove_uninitialized_var v = (uninitialized_vars := IntSet.remove (abs v.v_id) !uninitialized_vars) in *)
-	let initialized_vars = ref IntSet.empty in
-	let is_var_uninitialized v = not (IntSet.mem (abs v.v_id) !initialized_vars) in
-	let add_uninitialized_var v = () in (* (initialized_vars := IntSet.remove (abs v.v_id) !initialized_vars) in *)
-	let remove_uninitialized_var v = (initialized_vars := IntSet.add (abs v.v_id) !initialized_vars) in
 	let rec find_locals captured e =
 		let capture_inline v e1 = 
 			find_locals true e1;
@@ -1492,6 +1485,7 @@ let inline_constructors ctx e =
 			begin match get_inlined_var e1 true with
 			| Some v when is_var_uninitialized v ->
 				capture_inline v e2;
+				ctx.com.warning "assigned uninitialized" e.epos;
 				if not (is_var_uninitialized v) then cancel v e.epos;
 				remove_uninitialized_var v
 			| _ ->
