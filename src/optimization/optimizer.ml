@@ -1382,19 +1382,38 @@ let inline_constructors ctx e =
 		else (string_of_int i)
 	in
 	let is_extern_ctor c cf = c.cl_extern || Meta.has Meta.Extern cf.cf_meta in
-	let rec get_inlined_var e = match e.eexpr with
+	let rec get_inlined_var e follow_fields = match e.eexpr with
 		| TLocal(v) when v.v_id < 0 -> Some v
-		| TCast(e,None) | TParenthesis(e) -> get_inlined_var e
+		| TCast(e,None) | TParenthesis(e) -> get_inlined_var e follow_fields
+		| TField(ee, fa) when follow_fields ->
+			begin try match get_inlined_var ee true with
+			| Some v ->
+				let fv = get_field_var v (field_name fa) in 
+				if fv.v_id < 0 then Some fv else None
+			| None ->
+				None
+			with Not_found ->
+				None
+			end
 		| _ -> None
 	in
-	let uninitialized_vars = ref IntSet.empty in
+	let shallow_map_to_inlined_var_local e = Type.map_expr (fun e -> 
+		let get_local v = mk (TLocal v) v.v_type e.epos in
+		Option.default e (Option.map get_local (get_inlined_var e true))
+	) e in
+	(* let uninitialized_vars = ref IntSet.empty in
 	let is_var_uninitialized v = IntSet.mem (abs v.v_id) !uninitialized_vars in
 	let add_uninitialized_var v = (uninitialized_vars := IntSet.add (abs v.v_id) !uninitialized_vars) in
-	let remove_uninitialized_var v = (uninitialized_vars := IntSet.remove (abs v.v_id) !uninitialized_vars) in
+	let remove_uninitialized_var v = (uninitialized_vars := IntSet.remove (abs v.v_id) !uninitialized_vars) in *)
+	let initialized_vars = ref IntSet.empty in
+	let is_var_uninitialized v = not (IntSet.mem (abs v.v_id) !initialized_vars) in
+	let add_uninitialized_var v = () in (* (initialized_vars := IntSet.remove (abs v.v_id) !initialized_vars) in *)
+	let remove_uninitialized_var v = (initialized_vars := IntSet.add (abs v.v_id) !initialized_vars) in
 	let rec find_locals captured e =
 		let capture_inline v e1 = 
 			find_locals true e1;
-			let rec loop el_init e1 = match e1.eexpr with
+			let rec loop el_init e1 =
+				match e1.eexpr with
 				| TBlock el ->
 					begin match List.rev el with
 					| e1 :: el ->
@@ -1449,30 +1468,53 @@ let inline_constructors ctx e =
 					add v e (IKArray (List.length el))
 				| TCast(e1,None) | TParenthesis e1 ->
 					loop el_init e1
-				| TBinop(OpAssign, {eexpr = TLocal(v2)}, _)
-				| TLocal v2 when v2.v_id < 0 ->
-					ctx.com.warning "Alias detected" e.epos;
-					let e = mk (TBlock (List.rev el_init)) ctx.t.tvoid e.epos in
-					add v e (IKAlias v2)
-				| _ ->
-					()
+				| TBinop(OpAssign, e1, _) ->
+					loop el_init e1 (* TODO THIS IS WRONG *)
+				| _ -> (* TLocal v2 when v2.v_id < 0 -> *)
+					begin match get_inlined_var e1 true with
+					| Some v2 -> 
+						ctx.com.warning "Alias detected" e.epos;
+						ctx.com.warning "Aliased" v2.v_pos;
+						ctx.com.warning v2.v_name v2.v_pos;
+						ctx.com.warning "Aliaser" v.v_pos;
+						ctx.com.warning v.v_name v.v_pos;
+						let e = mk (TBlock (List.rev el_init)) ctx.t.tvoid e.epos in
+						add v e (IKAlias v2)
+					| None -> ()
+					end
 			in
 			loop [] e1
 		in
 		match e.eexpr with
 		| TVar(v,None) -> add_uninitialized_var v
-		| TBinop(OpAssign, {eexpr = TLocal(v)}, srce) when is_var_uninitialized v ->
-			capture_inline v srce;
-			if not (is_var_uninitialized v) then cancel v e.epos;
-			remove_uninitialized_var v
-		| TVar(v,Some e1) ->
-			capture_inline v e1
-		| TBinop(OpAssign,({eexpr = TField({eexpr = TLocal v},fa)} as e1),e2) when v.v_id < 0 ->
-			let s = field_name fa in
-			(try ignore(get_field_var v s) with Not_found -> ignore(add_field_var v s e1.etype));
-			find_locals false e2
+		| TVar(v,Some e1) -> capture_inline v e1
+		| TBinop(OpAssign, e1, e2) ->
+			begin match get_inlined_var e1 true with
+			| Some v when is_var_uninitialized v ->
+				capture_inline v e2;
+				if not (is_var_uninitialized v) then cancel v e.epos;
+				remove_uninitialized_var v
+			| _ ->
+				begin match e1.eexpr with
+				| TField(ee,fa) ->
+					begin match get_inlined_var ee true with
+					| Some v -> 
+						let s = field_name fa in
+						let v = try get_field_var v s with Not_found -> add_field_var v s e1.etype in
+						ctx.com.warning "Assigned variable" e.epos;
+						ctx.com.warning v.v_name v.v_pos;
+						if is_var_uninitialized v then begin
+							capture_inline v e2;
+							if not (is_var_uninitialized v) then cancel v e.epos;
+							remove_uninitialized_var v
+						end else find_locals false e2
+					| None -> Type.iter (find_locals false) e
+					end
+				| _ -> Type.iter (find_locals false) e
+				end
+			end
 		| TField(ee,fa) ->
-			begin match get_inlined_var ee with
+			begin match get_inlined_var ee true with
 			| Some v ->
 				begin match extract_field fa with
 				| Some ({cf_kind = Var _} as cf) ->
@@ -1489,30 +1531,37 @@ let inline_constructors ctx e =
 				end
 			| _ -> Type.iter (find_locals false) e
 			end
-		| TArray({eexpr = TLocal v},{eexpr = TConst (TInt i)}) when v.v_id < 0 ->
-			let i = Int32.to_int i in
-			begin try
-				let ii = IntMap.find v.v_id !vars in
-				let l = match ii.ii_kind with
-					| IKArray l -> l
-					| _ -> raise Not_found
-				in
-				if i < 0 || i >= l then raise Not_found;
-			with Not_found ->
-				cancel v e.epos
+		| TArray(ee,{eexpr = TConst (TInt i)}) ->
+			begin match get_inlined_var ee true with
+			| Some v ->
+				let i = Int32.to_int i in
+				begin try
+					let ii = IntMap.find v.v_id !vars in
+					let l = match ii.ii_kind with
+						| IKArray l -> l
+						| _ -> raise Not_found
+					in
+					if i < 0 || i >= l then raise Not_found;
+				with Not_found ->
+					cancel v e.epos
+				end
+			| None -> Type.iter (find_locals false) e
 			end
-		| TLocal v when v.v_id < 0 && not captured ->
-			cancel v e.epos;
 		| TBlock(el) ->
 			let rec loop = function
 				| e1::e2::el -> find_locals true e1; loop (e2::el)
 				| [e] -> find_locals captured e
 				| _ -> ()
 			in loop el
-		| TBlock _ | TParenthesis _ | TCast (_,None) ->
+		| TParenthesis _ | TCast (_,None) ->
 			Type.iter (find_locals captured) e
 		| _ ->
-			Type.iter (find_locals false) e
+			if not captured then 
+				match get_inlined_var e true with
+				| Some v -> cancel v e.epos;
+				| None -> Type.iter (find_locals false) e
+			else
+				Type.iter (find_locals false) e
 	in
 	find_locals false e;
 	(* Remove aliases with cancelled referenced variables *)
@@ -1576,21 +1625,31 @@ let inline_constructors ctx e =
 		with Not_found ->
 			mk (TConst TNull) t p
 	in
-	let rec loop e = match e.eexpr with
-		| TBinop(OpAssign, {eexpr = TLocal(v)}, _) when v.v_id < 0 ->
-			loop (inline_var_init v e.epos)
+	if IntMap.is_empty !vars then e
+	else 
+	let rec loop e = try match e.eexpr with
 		| TVar(v,None) when v.v_id < 0 ->
 			loop (inline_var_decl v e.epos false);
 		| TVar(v,Some _) when v.v_id < 0 ->
 			loop (inline_var_decl v e.epos true);
-		| TBinop(OpAssign,({eexpr = TField({eexpr = TLocal v},fa)} as e1),e2) when v.v_id < 0 ->
-			let e2 = loop e2 in
-			assign_or_declare v (field_name fa) e2 e1.etype e.epos
+		| TBinop(OpAssign, e1, e2) ->
+			begin match get_inlined_var e1 true with
+			| Some v -> ctx.com.warning ("Straight_Assign "^v.v_name^" "^string_of_int v.v_id) v.v_pos; loop (inline_var_init v e.epos)
+			| None ->
+				begin match e1.eexpr with
+					| TField(ee,fa) ->
+						let e2 = loop e2 in
+						begin match get_inlined_var ee true with
+						| Some v -> ctx.com.warning ("Property_assign" ^ v.v_name) v.v_pos; assign_or_declare v (field_name fa) e2 v.v_type e.epos (* TODO: THE TYPE MIGHT BE WRONG! *)
+						| _ -> Type.map_expr loop e
+						end
+					| _ -> Type.map_expr loop e
+				end
+			end
 		| TField(ee,fa) ->
-			begin match get_inlined_var ee with
-			| Some v ->
-				use_local_or_null v (field_name fa) e.etype e.epos
-			| _ -> Type.map_expr loop e
+			begin match get_inlined_var ee true with
+			| Some v -> use_local_or_null v (field_name fa) e.etype e.epos
+			| _ -> let ee = loop ee in mk (TField(ee,fa)) e.etype e.epos
 			end
 		| TBinop(OpAssign,({eexpr = TArray({eexpr = TLocal v},{eexpr = TConst (TInt i)})} as e1),e2) when v.v_id < 0 ->
 			let e2 = loop e2 in
@@ -1602,7 +1661,7 @@ let inline_constructors ctx e =
 			let rec block acc el = match el with
 				| e1 :: el ->
 					begin match loop e1 with
-					| {eexpr = TLocal(v)} when v.v_id < 0 -> block acc el (* TODO: Explain why this is needed *)
+					| e when Option.is_some (get_inlined_var e true) -> block acc el (* TODO: Explain why this is needed *)
 					| {eexpr = TMeta((Meta.MergeBlock,_,_),{eexpr = TBlock el2})} ->
 						let acc = block acc el2 in
 						block acc el
@@ -1618,15 +1677,16 @@ let inline_constructors ctx e =
 			Type.map_expr loop e
 		| _ ->
 			Type.map_expr loop e
+		with Not_found -> (ctx.com.warning "NotFoundYO" e.epos; raise Not_found)
 	in
 	let e = loop e in
-	(*if !doneit then begin 
+	if !doneit then begin 
 		prerr_endline " ";
 		prerr_endline "------------------------";
 		prerr_endline (Type.s_expr Type.Printer.s_type e);
 		prerr_endline "------------------------";
 		prerr_endline " ";
-	end;*) e
+	end; e
 
 (* ---------------------------------------------------------------------- *)
 (* COMPLETION *)
