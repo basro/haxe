@@ -1478,34 +1478,50 @@ let inline_constructors ctx e =
 			in
 			loop [] e1
 		in
+		let special_map e = match e.eexpr with
+		| TField(e',fa) ->
+			begin match get_inlined_var e' true with
+			| Some v -> 
+				begin try
+					let fv = get_field_var v (field_name fa) in
+					if fv.v_id < 0 then (mk (TLocal fv) e.etype e.epos) else raise Not_found
+				with Not_found ->
+					mk (TField((mk (TLocal v) e'.etype e'.epos),fa)) e.etype e.epos
+				end
+			| None -> e
+			end
+		| _ ->
+			begin match get_inlined_var e true with
+			| Some v -> mk (TLocal v) e.etype e.epos
+			| None -> e
+			end
+		in
 		match e.eexpr with
 		| TVar(v,None) -> add_uninitialized_var v
 		| TVar(v,Some e1) -> capture_inline v e1
 		| TBinop(OpAssign, e1, e2) ->
-			begin match get_inlined_var e1 true with
-			| Some v when is_var_uninitialized v ->
+			let e1 = special_map e1 in
+			begin match e1.eexpr with
+			| TLocal(v) when is_var_uninitialized v ->
+				ctx.com.warning "Assign uninitialized variable" e.epos;
 				capture_inline v e2;
-				ctx.com.warning "assigned uninitialized" e.epos;
 				if not (is_var_uninitialized v) then cancel v e.epos;
 				remove_uninitialized_var v
-			| _ ->
-				begin match e1.eexpr with
-				| TField(ee,fa) ->
-					begin match get_inlined_var ee true with
-					| Some v -> 
-						let s = field_name fa in
-						let v = try get_field_var v s with Not_found -> add_field_var v s e1.etype in
-						ctx.com.warning "Assigned variable" e.epos;
-						ctx.com.warning v.v_name v.v_pos;
-						if is_var_uninitialized v then begin
-							capture_inline v e2;
-							if not (is_var_uninitialized v) then cancel v e.epos;
-							remove_uninitialized_var v
-						end else find_locals false e2
-					| None -> Type.iter (find_locals false) e
-					end
-				| _ -> Type.iter (find_locals false) e
+			| TField({eexpr = TLocal(v)}, fa) when v.v_id < 0 ->
+				let s = field_name fa in
+				begin try
+					ctx.com.warning "Assign field" e.epos;
+					ignore(get_field_var v s);
+					find_locals false e2
+				with Not_found ->
+					ctx.com.warning "Assign uninitialized field variable" e.epos;
+					let v = add_field_var v s e1.etype in
+					ctx.com.warning v.v_name v.v_pos;
+					capture_inline v e2;
+					if not (is_var_uninitialized v) then cancel v e.epos;
+					remove_uninitialized_var v
 				end
+			| _ -> Type.iter (find_locals false) e
 			end
 		| TField(ee,fa) ->
 			begin match get_inlined_var ee true with
