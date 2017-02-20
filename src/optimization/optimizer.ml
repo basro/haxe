@@ -1561,7 +1561,7 @@ let inline_constructors ctx e =
 					if cf.cf_name <> "length" then
 						begin match (IntMap.find v.v_id !vars).ii_kind with
 						| IKArray _ -> cancel v e.epos
-						| _ -> (try ignore(get_field_var v cf.cf_name) with Not_found -> ignore(add_field_var v cf.cf_name e.etype));
+						| _ -> (try ignore(get_field_var v cf.cf_name) with Not_found -> cancel v e.epos);(* ignore(add_field_var v cf.cf_name e.etype)); *)
 						end
 				| _ -> cancel v e.epos
 				end
