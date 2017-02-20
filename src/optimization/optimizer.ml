@@ -1432,7 +1432,7 @@ let inline_constructors ctx e =
 						in
 						add v e' (IKCtor(cf,is_extern_ctor c cf));
 						ctx.com.warning "added v" v.v_pos;
-						find_locals false e
+						find_locals false e'
 					| None ->
 						()
 					end
