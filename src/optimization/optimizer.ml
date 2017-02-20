@@ -1446,7 +1446,8 @@ let inline_constructors ctx e =
 							e :: acc
 						) el_init fl in
 						let e = mk (TBlock (List.rev el)) ctx.t.tvoid e.epos in
-						add v e IKStructure
+						add v e IKStructure;
+						find_locals false e
 					with Exit ->
 						()
 					end
@@ -1523,24 +1524,6 @@ let inline_constructors ctx e =
 				end
 			| _ -> Type.iter (find_locals false) e
 			end
-		| TField(ee,fa) ->
-			begin match get_inlined_var ee true with
-			| Some v ->
-				begin match extract_field fa with
-				| Some ({cf_kind = Var _} as cf) ->
-					(* Arrays are not supposed to have public var fields, besides "length" (which we handle when inlining),
-					   however, its inlined methods may generate access to private implementation fields (such as internal
-					   native array), in this case we have to cancel inlining.
-					*)
-					if cf.cf_name <> "length" then
-						begin match (IntMap.find v.v_id !vars).ii_kind with
-						| IKArray _ -> cancel v e.epos
-						| _ -> (try ignore(get_field_var v cf.cf_name) with Not_found -> ignore(add_field_var v cf.cf_name e.etype));
-						end
-				| _ -> cancel v e.epos
-				end
-			| _ -> Type.iter (find_locals false) e
-			end
 		| TArray(ee,{eexpr = TConst (TInt i)}) ->
 			begin match get_inlined_var ee true with
 			| Some v ->
@@ -1563,15 +1546,29 @@ let inline_constructors ctx e =
 				| [e] -> find_locals captured e
 				| _ -> ()
 			in loop el
-		| TParenthesis _ | TCast (_,None) ->
-			Type.iter (find_locals captured) e
+		| TParenthesis e | TCast (e,None) ->
+			find_locals captured e
 		| _ ->
-			if not captured then 
-				match get_inlined_var e true with
-				| Some v -> cancel v e.epos;
-				| None -> Type.iter (find_locals false) e
-			else
-				Type.iter (find_locals false) e
+			let e = special_map e in
+			begin match e.eexpr with
+			| TField({eexpr = TLocal v},fa) when v.v_id < 0 ->
+				begin match extract_field fa with
+				| Some ({cf_kind = Var _} as cf) ->
+					(* Arrays are not supposed to have public var fields, besides "length" (which we handle when inlining),
+					   however, its inlined methods may generate access to private implementation fields (such as internal
+					   native array), in this case we have to cancel inlining.
+					*)
+					if cf.cf_name <> "length" then
+						begin match (IntMap.find v.v_id !vars).ii_kind with
+						| IKArray _ -> cancel v e.epos
+						| _ -> (try ignore(get_field_var v cf.cf_name) with Not_found -> ignore(add_field_var v cf.cf_name e.etype));
+						end
+				| _ -> cancel v e.epos
+				end
+			| TLocal v when v.v_id < 0 && not captured ->
+				cancel v e.epos;
+			| _ -> Type.iter (find_locals false) e
+			end
 	in
 	find_locals false e;
 	(* Remove aliases with cancelled referenced variables *)
