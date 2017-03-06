@@ -1306,13 +1306,41 @@ let inline_constructors ctx e =
 		| [e] -> e
 		| _ -> mk (TBlock (el)) t e.epos
 	in
-	let rec map_inline_objects e = 
+	let rec map_inline_objects (seen_ctors:tclass_field list) e = 
 		let mk_io (iok : inline_object_kind) : inline_object = {io_kind = iok; io_cancelled = false; io_declared = false; io_inlined = false; io_fields = PMap.empty; io_aliases = []; io_pos = e.epos} in
 		match e.eexpr with
 		| TConst(TString("debugon")) -> debugon := true; e
+		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl)
+			when List.length seen_ctors < 32 && not (List.memq cf seen_ctors) -> (* when type_iseq v.v_type e1.etype *)
+			begin
+				let seen_ctors = cf :: seen_ctors in
+				let v = alloc_var "inlctor" e.etype e.epos in
+				match type_inline ctx cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl ctx.t.tvoid None e.epos true with
+				| Some inlined_expr ->
+					(* add field inits here because the filter has not run yet (issue #2336) *)
+					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf)) in
+					let ev = mk (TLocal v) v.v_type e.epos in
+					let el = List.fold_left (fun acc cf -> match cf.cf_kind,cf.cf_expr with
+						| Var _,Some e ->
+							ignore(alloc_io_field io v cf.cf_name cf.cf_type);
+							let ef = mk (TField(ev,FInstance(c,tl,cf))) cf.cf_type e.epos in
+							let e = mk (TBinop(OpAssign,ef,e)) cf.cf_type e.epos in
+							e :: acc
+						| Var _, _ ->
+							ignore(alloc_io_field io v cf.cf_name cf.cf_type);
+							acc
+						| _ -> acc
+					) [] c.cl_ordered_fields in
+					let el = List.rev(inlined_expr::el) in
+					let el = List.map (map_inline_objects seen_ctors) el in
+					let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_analyzed = false}) in
+					set_iv_alias iv io;
+					ev
+				| None -> e
+			end
 		| TObjectDecl fl when fl <> [] ->
 			let io = mk_io (IOKStructure) in
-			let fl = List.map (fun (v,e) -> v, map_inline_objects e) fl in
+			let fl = List.map (fun (v,e) -> v, map_inline_objects seen_ctors e) fl in
 			let e = {e with eexpr = TObjectDecl fl} in
 			let v = alloc_var "inlobj" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
@@ -1339,7 +1367,7 @@ let inline_constructors ctx e =
 			in
 			let el = List.mapi (fun i e ->
 				let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) e.etype e.epos in
-				let e = map_inline_objects e in
+				let e = map_inline_objects seen_ctors e in
 				ignore(alloc_io_field io v (int_field_name i) ctx.t.tint);
 				mk (TBinop(OpAssign,ef,e)) e.etype e.epos
 			) el in
@@ -1348,11 +1376,14 @@ let inline_constructors ctx e =
 			set_iv_alias iv io;
 			ev
 		| _ ->
-			Type.map_expr map_inline_objects e
+			Type.map_expr (map_inline_objects seen_ctors) e
 	in
-	let e = map_inline_objects e in
+	let e = map_inline_objects [] e in
 	if not !debugon then originale else
-	let rec analyze_aliases (captured:bool) (e:texpr) : inline_var option = match e.eexpr with
+	let rec analyze_aliases (captured:bool) (allow_unassigned:bool) (e:texpr) : inline_var option =
+		let analyze_aliases_allow_unassigned e = analyze_aliases true true e in
+		let analyze_aliases captured e = analyze_aliases captured false e in
+		match e.eexpr with
 		| TVar(v,None) -> ignore(add v IVKLocal); None
 		| TVar(v,Some rve) ->
 			debugmsg "TVar Some rve" e.epos;
@@ -1366,7 +1397,7 @@ let inline_constructors ctx e =
 			end;
 			None
 		| TBinop(OpAssign, lve, rve) ->
-			begin match analyze_aliases true lve with
+			begin match analyze_aliases_allow_unassigned lve with
 			| Some({iv_state = IVSUnassigned} as iv) ->
 				debugmsg "Capturing assign" rve.epos;
 				begin match analyze_aliases true rve with
@@ -1385,6 +1416,7 @@ let inline_constructors ctx e =
 			| Some({iv_state = IVSAliasing io} as iv) ->
 				begin try
 					let fiv = get_io_field io (field_name fa) in
+					if not allow_unassigned && (fiv.iv_state == IVSUnassigned || fiv.iv_closed) then raise Not_found;
 					if fiv.iv_closed || not captured then cancel_iv fiv e.epos;
 					Some(fiv)
 				with Not_found ->
@@ -1403,6 +1435,7 @@ let inline_constructors ctx e =
 				begin try
 					let fname = int_field_name i in
 					let fiv = get_io_field io fname in
+					if not allow_unassigned && (fiv.iv_state == IVSUnassigned || fiv.iv_closed) then raise Not_found;
 					if fiv.iv_closed || not captured then cancel_iv fiv e.epos;
 					Some(fiv)
 				with Not_found ->
@@ -1443,7 +1476,7 @@ let inline_constructors ctx e =
 			scoped_ivs := old;
 			None
 	in
-	ignore(analyze_aliases false e);
+	ignore(analyze_aliases false false e);
 	debugmsg "Finished analyzing aliases" e.epos;
 	let get_iv_aliased_obj (iv : inline_var) : inline_object option = match iv.iv_state with
 		| IVSAliasing io -> Some io
