@@ -1311,36 +1311,39 @@ let inline_constructors ctx e =
 		match e.eexpr with
 		| TConst(TString("debugon")) -> debugon := true; e
 		| TObjectDecl fl when fl <> [] ->
+			let io = mk_io (IOKStructure) in
 			let fl = List.map (fun (v,e) -> v, map_inline_objects e) fl in
 			let e = {e with eexpr = TObjectDecl fl} in
 			let v = alloc_var "inlobj" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
 			let el = List.map (fun (s,e) ->
 				(*if not (is_valid_ident s) then raise Exit; TODO: CHECK FOR THIS *)
+				ignore(alloc_io_field io v s e.etype);
 				let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
 				let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
 				e
 			) fl in
-			let io = mk_io (IOKStructure) in
 			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_analyzed = false}) in
 			set_iv_alias iv io;
 			ev
 		| TArrayDecl el ->
+			let len = List.length el in
+			let io = mk_io (IOKArray(len)) in
 			let v = alloc_var "inlarr" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
-			let len = List.length el in
 			let lenexpr =
 				let vale = (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos) in
 				let ef = mk (TField(ev,FDynamic "length")) e.etype e.epos in
+				ignore(alloc_io_field io v "length" ctx.t.tint);
 				mk (TBinop(OpAssign,ef,vale)) ctx.t.tint e.epos
 			in
 			let el = List.mapi (fun i e ->
 				let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) e.etype e.epos in
 				let e = map_inline_objects e in
+				ignore(alloc_io_field io v (int_field_name i) ctx.t.tint);
 				mk (TBinop(OpAssign,ef,e)) e.etype e.epos
 			) el in
 			let el = (lenexpr::el) in
-			let io = mk_io (IOKArray(len)) in
 			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_analyzed = false}) in
 			set_iv_alias iv io;
 			ev
@@ -1349,14 +1352,6 @@ let inline_constructors ctx e =
 	in
 	let e = map_inline_objects e in
 	if not !debugon then originale else
-	let get_or_make_io_field io fname iv t = try
-		get_io_field io fname
-	with Not_found ->
-		debugmsg ("field not found " ^ fname) e.epos;
-		(* TODO: Validate field access *)
-		let v = iv.iv_var in
-		alloc_io_field io v fname t
-	in
 	let rec analyze_aliases (captured:bool) (e:texpr) : inline_var option = match e.eexpr with
 		| TVar(v,None) -> ignore(add v IVKLocal); None
 		| TVar(v,Some rve) ->
@@ -1388,9 +1383,14 @@ let inline_constructors ctx e =
 			debugmsg "TField" e.epos;
 			begin match analyze_aliases true te with
 			| Some({iv_state = IVSAliasing io} as iv) ->
-				let fiv = get_or_make_io_field io (field_name fa) iv e.etype in
-				if fiv.iv_closed || not captured then cancel_iv fiv e.epos;
-				Some(fiv)
+				begin try
+					let fiv = get_io_field io (field_name fa) in
+					if fiv.iv_closed || not captured then cancel_iv fiv e.epos;
+					Some(fiv)
+				with Not_found ->
+					cancel_iv iv e.epos;
+					None
+				end
 			| Some(iv) ->
 				cancel_iv iv e.epos;
 				None
@@ -1400,10 +1400,15 @@ let inline_constructors ctx e =
 			let i = Int32.to_int i in
 			begin match analyze_aliases true te with
 			| Some({iv_state = IVSAliasing({io_kind = IOKArray(l)} as io)} as iv) when i >= 0 && i < l ->
-				let fname = int_field_name i in
-				let fiv = get_or_make_io_field io fname iv e.etype in
-				if fiv.iv_closed || not captured then cancel_iv fiv e.epos;
-				Some(fiv)
+				begin try
+					let fname = int_field_name i in
+					let fiv = get_io_field io fname in
+					if fiv.iv_closed || not captured then cancel_iv fiv e.epos;
+					Some(fiv)
+				with Not_found ->
+					cancel_iv iv e.epos;
+					None
+				end
 			| Some(iv) ->
 				cancel_iv iv e.epos;
 				None
