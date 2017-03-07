@@ -1166,7 +1166,7 @@ let basro_flatten_filter ctx e =
 *)
 
 type inline_object_kind = 
-	| IOKCtor of tclass_field * bool
+	| IOKCtor of tclass_field * bool * tvar list
 	| IOKStructure
 	| IOKArray of int
 
@@ -1199,6 +1199,7 @@ and inline_var = {
 
 let inline_constructors ctx e =
 	let originale = e in
+	let found_inline_candidates = ref false in
 	let is_valid_ident s =
 		try
 			if String.length s = 0 then raise Exit;
@@ -1228,9 +1229,12 @@ let inline_constructors ctx e =
 			List.iter (fun iv -> cancel_iv iv p) io.io_aliases;
 			PMap.iter (fun _ iv -> cancel_iv iv p) io.io_fields;
 			match io.io_kind with
-			| IOKCtor(_,true) ->
-				display_error ctx "Extern constructor could not be inlined" p;
-				error "Variable is used here" p;
+			| IOKCtor(_,isextern,vars) ->
+				List.iter (fun v -> if v.v_id < 0 then cancel_v v p) vars;
+				if isextern then begin
+					display_error ctx "Extern constructor could not be inlined" io.io_pos;
+					display_error ctx "Cancellation happened here" p;
+				end
 			| _ -> ()
 		end
 	and cancel_iv (iv:inline_var) (p:pos) : unit =
@@ -1253,8 +1257,7 @@ let inline_constructors ctx e =
 				v.v_id <- (abs v.v_id);
 			end
 		end
-	in
-	let cancel_v (v:tvar) (p:pos) : unit =
+	and cancel_v (v:tvar) (p:pos) : unit =
 		try let iv = get_iv v in
 			cancel_iv iv p
 		with Not_found -> ()
@@ -1313,12 +1316,18 @@ let inline_constructors ctx e =
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl)
 			when List.length seen_ctors < 32 && not (List.memq cf seen_ctors) -> (* when type_iseq v.v_type e1.etype *)
 			begin
-				let seen_ctors = cf :: seen_ctors in
+				let argvs, argvdecls = List.split (List.map (fun e -> 
+					let v = alloc_var "arg" e.etype e.epos in
+					let decle = mk (TVar (v, Some e)) ctx.t.tvoid e.epos in
+					v, decle
+				) pl) in
+				let pl = List.map (fun v -> mk (TLocal v) v.v_type v.v_pos) argvs in
 				let v = alloc_var "inlctor" e.etype e.epos in
 				match type_inline ctx cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl ctx.t.tvoid None e.epos true with
 				| Some inlined_expr ->
+					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) in
 					(* add field inits here because the filter has not run yet (issue #2336) *)
-					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf)) in
+					
 					let ev = mk (TLocal v) v.v_type e.epos in
 					let el = List.fold_left (fun acc cf -> match cf.cf_kind,cf.cf_expr with
 						| Var _,Some e ->
@@ -1331,10 +1340,12 @@ let inline_constructors ctx e =
 							acc
 						| _ -> acc
 					) [] c.cl_ordered_fields in
-					let el = List.rev(inlined_expr::el) in
+					let el = argvdecls@(List.rev(inlined_expr::el)) in
+					let seen_ctors = cf :: seen_ctors in
 					let el = List.map (map_inline_objects seen_ctors) el in
 					let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_analyzed = false}) in
 					set_iv_alias iv io;
+					found_inline_candidates := true;
 					ev
 				| None -> e
 			end
@@ -1353,6 +1364,7 @@ let inline_constructors ctx e =
 			) fl in
 			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_analyzed = false}) in
 			set_iv_alias iv io;
+			found_inline_candidates := true;
 			ev
 		| TArrayDecl el ->
 			let len = List.length el in
@@ -1374,12 +1386,14 @@ let inline_constructors ctx e =
 			let el = (lenexpr::el) in
 			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_analyzed = false}) in
 			set_iv_alias iv io;
+			found_inline_candidates := true;
 			ev
 		| _ ->
 			Type.map_expr (map_inline_objects seen_ctors) e
 	in
 	let e = map_inline_objects [] e in
-	if not !debugon then originale else
+	if not !found_inline_candidates then e else
+	(* if not !debugon then originale else *)
 	let rec analyze_aliases (captured:bool) (allow_unassigned:bool) (e:texpr) : inline_var option =
 		let analyze_aliases_allow_unassigned e = analyze_aliases true true e in
 		let analyze_aliases captured e = analyze_aliases captured false e in
@@ -1594,6 +1608,15 @@ let inline_constructors ctx e =
 				let e' = expr_list_to_expr el e'.etype e'.epos in
 				[mk (TParenthesis e') e.etype e.epos], None
 			end
+		| TCast (e',None) ->
+			let el, io = final_map e' in
+			begin match io with
+			| Some io ->
+				el, Some io
+			| None ->
+				let e' = expr_list_to_expr el e'.etype e'.epos in
+				[mk (TCast (e',None)) e.etype e.epos], None
+			end
 		| _ ->
 			let f e =
 				let (el,_) = final_map e in
@@ -1608,11 +1631,13 @@ let inline_constructors ctx e =
 		let v = iv.iv_var in
 		v.v_id <- abs(v.v_id)
 	) !vars;
-	prerr_endline " ";
-	prerr_endline "------------------------";
-	prerr_endline (Type.s_expr Type.Printer.s_type e);
-	prerr_endline "------------------------";
-	prerr_endline " ";
+	if !debugon then begin
+		prerr_endline " ";
+		prerr_endline "------------------------";
+		prerr_endline (Type.s_expr Type.Printer.s_type e);
+		prerr_endline "------------------------";
+		prerr_endline " ";
+	end;
 	e
 
 (* ---------------------------------------------------------------------- *)
