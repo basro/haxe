@@ -1198,7 +1198,6 @@ and inline_var = {
 }
 
 let inline_constructors ctx e =
-	let originale = e in
 	let found_inline_candidates = ref false in
 	let is_valid_ident s =
 		try
@@ -1400,32 +1399,27 @@ let inline_constructors ctx e =
 		match e.eexpr with
 		| TVar(v,None) -> ignore(add v IVKLocal); None
 		| TVar(v,Some rve) ->
-			debugmsg "TVar Some rve" e.epos;
 			begin match analyze_aliases true rve with
 			| Some({iv_state = IVSAliasing(io)}) ->
 				let iv = add v IVKLocal in
-				debugmsg ("Capturing in "^iv.iv_var.v_name) rve.epos;
 				set_iv_alias iv io;
-			| _ ->
-				debugmsg "Var decl no capture" rve.epos;
+			| _ -> ()
 			end;
 			None
 		| TBinop(OpAssign, lve, rve) ->
 			begin match analyze_aliases_allow_unassigned lve with
 			| Some({iv_state = IVSUnassigned} as iv) ->
-				debugmsg "Capturing assign" rve.epos;
 				begin match analyze_aliases true rve with
 				| Some({iv_state = IVSAliasing(io)}) ->
 					scoped_ivs := iv :: !scoped_ivs;
 					set_iv_alias iv io
-				| _ -> cancel_iv iv lve.epos (* TODO, consider matching the other iv and cancelling it? *)
+				| _ -> cancel_iv iv lve.epos
 				end;
 				Some iv
 			| Some(iv) -> cancel_iv iv e.epos; ignore(analyze_aliases false rve); None
 			| _ -> ignore(analyze_aliases false rve); None
 			end
 		| TField(te, fa) ->
-			debugmsg "TField" e.epos;
 			begin match analyze_aliases true te with
 			| Some({iv_state = IVSAliasing io} as iv) ->
 				begin try
@@ -1462,7 +1456,6 @@ let inline_constructors ctx e =
 			| _ -> None
 			end
 		| TLocal(v) when v.v_id < 0 ->
-			debugmsg "TLocal of inlined var" e.epos;
 			let iv = get_iv v in
 			begin match iv with
 			| {iv_kind = IVKRoot r} when not r.r_analyzed ->
@@ -1481,7 +1474,6 @@ let inline_constructors ctx e =
 		| TParenthesis e | TCast (e,None) ->
 			analyze_aliases captured e
 		| _ ->
-			debugmsg "Entering here" e.epos;
 			let old = !scoped_ivs in
 			scoped_ivs := [];
 			let analyze_aliases_nocapture e = ignore(analyze_aliases false e) in
@@ -1492,34 +1484,26 @@ let inline_constructors ctx e =
 	in
 	ignore(analyze_aliases false false e);
 	debugmsg "Finished analyzing aliases" e.epos;
-	let get_iv_aliased_obj (iv : inline_var) : inline_object option = match iv.iv_state with
-		| IVSAliasing io -> Some io
-		| _ -> None
-	in
 	let expr_list_to_expr el t p = match el with
 		| [] -> mk (TBlock[]) ctx.t.tvoid p
 		| [e] -> e
 		| _ -> mk (TBlock (List.rev el)) t p
 	in
 	let rec get_iv_var_decls (iv:inline_var) : texpr list =
-		debugmsg ("getting var decls for "^iv.iv_var.v_name) iv.iv_var.v_pos;
 		match iv with
 		| {iv_state = IVSAliasing io} when not io.io_declared ->
 			io.io_declared <- true;
 			PMap.foldi (fun _ iv acc -> (get_iv_var_decls iv)@acc) io.io_fields []
 		| {iv_state = IVSCancelled} ->
-			debugmsg ("making decl of var "^iv.iv_var.v_name) iv.iv_var.v_pos;
 			let v = iv.iv_var in
 			[(mk (TVar(v,None)) ctx.t.tvoid v.v_pos)]
 		| _ -> []
 	in
 	let rec final_map (e:texpr) : ((texpr list) * (inline_object option)) = 
-		debugmsg "Entering here" e.epos;
 		match e.eexpr with 
 		| TVar(v, None) when v.v_id < 0 ->
 			(get_iv_var_decls (get_iv v)), None
 		| TVar(v,Some e) when v.v_id < 0 ->
-			debugmsg "TVar" e.epos;
 			let el = (get_iv_var_decls (get_iv v)) in
 			let e,_ = (final_map e) in (e@el, None)
 		| TBinop(OpAssign, lve, rve) ->
@@ -1533,7 +1517,7 @@ let inline_constructors ctx e =
 				begin match lvel with
 				| [] -> raise Not_found (* TODO: Custom error *)
 				| e::el -> 
-					let e = mk (TBinop(OpAssign, e, rve)) e.etype e.epos in (* TODO, use type and pos of original binop expr *)
+					let e = mk (TBinop(OpAssign, e, rve)) e.etype e.epos in
 					(e::el), None
 				end
 			end
@@ -1626,7 +1610,6 @@ let inline_constructors ctx e =
 	in
 	let el,_ = final_map e in
 	let e = expr_list_to_expr el e.etype e.epos in
-	let var_decls = ref [] in
 	IntMap.iter (fun _ iv ->
 		let v = iv.iv_var in
 		v.v_id <- abs(v.v_id)
