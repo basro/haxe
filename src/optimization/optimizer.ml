@@ -1284,19 +1284,12 @@ let inline_constructors ctx e =
 	let get_io_field (io:inline_object) (s:string) : inline_var =
 		PMap.find s io.io_fields
 	in
-	let alloc_var_field v fname t =
-		let v' = alloc_var (Printf.sprintf "%s_%s" v.v_name fname) t v.v_pos in
-		v'.v_meta <- (Meta.InlineConstructorVariable,[],v.v_pos) :: v'.v_meta;
-		v'
-	in
-	let add_io_field io v fname t =
+	let alloc_io_field (io:inline_object) (fname:string) (t:t) (p:pos) : inline_var =
+		let v = alloc_var fname t p in
+		v.v_meta <- (Meta.InlineConstructorVariable,[],p) :: v.v_meta;
 		let iv = add v (IVKField (io,fname)) in
 		io.io_fields <- PMap.add fname iv io.io_fields;
-		debugmsg ("Added field "^v.v_name) v.v_pos;
 		iv
-	in
-	let alloc_io_field (io:inline_object) (v:tvar) (fname:string) (t:t) : inline_var =
-		add_io_field io (alloc_var_field v fname t) fname t
 	in
 	let int_field_name i =
 		if i < 0 then "n" ^ (string_of_int (-i))
@@ -1313,7 +1306,7 @@ let inline_constructors ctx e =
 		match e.eexpr with
 		| TConst(TString("debugon")) -> debugon := true; e
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl)
-			when List.length seen_ctors < 32 && not (List.memq cf seen_ctors) -> (* when type_iseq v.v_type e1.etype *)
+			when List.length seen_ctors < 32 && not (List.memq cf seen_ctors) ->
 			begin
 				let argvs, argvdecls = List.split (List.map (fun e -> 
 					let v = alloc_var "arg" e.etype e.epos in
@@ -1331,12 +1324,12 @@ let inline_constructors ctx e =
 					let ev = mk (TLocal v) v.v_type e.epos in
 					let el = List.fold_left (fun acc cf -> match cf.cf_kind,cf.cf_expr with
 						| Var _,Some e ->
-							ignore(alloc_io_field io v cf.cf_name cf.cf_type);
+							ignore(alloc_io_field io cf.cf_name cf.cf_type v.v_pos);
 							let ef = mk (TField(ev,FInstance(c,tl,cf))) cf.cf_type e.epos in
 							let e = mk (TBinop(OpAssign,ef,e)) cf.cf_type e.epos in
 							e :: acc
 						| Var _, _ ->
-							ignore(alloc_io_field io v cf.cf_name cf.cf_type);
+							ignore(alloc_io_field io cf.cf_name cf.cf_type v.v_pos);
 							acc
 						| _ -> acc
 					) [] c.cl_ordered_fields in
@@ -1358,7 +1351,7 @@ let inline_constructors ctx e =
 			begin try
 				let el = List.map (fun (s,e) ->
 					if not (is_valid_ident s) then raise Exit;
-					ignore(alloc_io_field io v s e.etype);
+					ignore(alloc_io_field io s e.etype v.v_pos);
 					let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
 					let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
 					e
@@ -1378,13 +1371,13 @@ let inline_constructors ctx e =
 			let lenexpr =
 				let vale = (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos) in
 				let ef = mk (TField(ev,FDynamic "length")) e.etype e.epos in
-				ignore(alloc_io_field io v "length" ctx.t.tint);
+				ignore(alloc_io_field io "length" ctx.t.tint v.v_pos);
 				mk (TBinop(OpAssign,ef,vale)) ctx.t.tint e.epos
 			in
 			let el = List.mapi (fun i e ->
 				let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) e.etype e.epos in
 				let e = map_inline_objects seen_ctors e in
-				ignore(alloc_io_field io v (int_field_name i) ctx.t.tint);
+				ignore(alloc_io_field io (int_field_name i) ctx.t.tint v.v_pos);
 				mk (TBinop(OpAssign,ef,e)) e.etype e.epos
 			) el in
 			let el = (lenexpr::el) in
