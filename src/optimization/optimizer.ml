@@ -1321,7 +1321,8 @@ let inline_constructors ctx e =
 					v, decle
 				) pl) in
 				let pl = List.map (fun v -> mk (TLocal v) v.v_type v.v_pos) argvs in
-				let v = alloc_var "inlctor" e.etype e.epos in
+				let _, cname = c.cl_path in
+				let v = alloc_var ("inl"^cname) e.etype e.epos in
 				match type_inline ctx cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl ctx.t.tvoid None e.epos true with
 				| Some inlined_expr ->
 					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) in
@@ -1621,9 +1622,17 @@ let inline_constructors ctx e =
 	in
 	let el,_ = final_map e in
 	let e = expr_list_to_expr el e.etype e.epos in
+	let rec get_pretty_name iv = match iv.iv_kind with
+		| IVKField(io,fname) ->
+			(get_pretty_name (List.hd io.io_aliases)) ^ "_" ^ fname;
+		| _ -> iv.iv_var.v_name
+	in
 	IntMap.iter (fun _ iv ->
 		let v = iv.iv_var in
-		v.v_id <- abs(v.v_id)
+		if v.v_id < 0 then begin
+			v.v_id <- -v.v_id;
+			v.v_name <- get_pretty_name iv
+		end
 	) !vars;
 	if !debugon then begin
 		prerr_endline " ";
