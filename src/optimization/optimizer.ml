@@ -1354,17 +1354,21 @@ let inline_constructors ctx e =
 			let e = {e with eexpr = TObjectDecl fl} in
 			let v = alloc_var "inlobj" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
-			let el = List.map (fun (s,e) ->
-				(*if not (is_valid_ident s) then raise Exit; TODO: CHECK FOR THIS *)
-				ignore(alloc_io_field io v s e.etype);
-				let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
-				let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
+			begin try
+				let el = List.map (fun (s,e) ->
+					if not (is_valid_ident s) then raise Exit;
+					ignore(alloc_io_field io v s e.etype);
+					let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
+					let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
+					e
+				) fl in
+				let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_analyzed = false}) in
+				set_iv_alias iv io;
+				found_inline_candidates := true;
+				ev
+			with Exit ->
 				e
-			) fl in
-			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_analyzed = false}) in
-			set_iv_alias iv io;
-			found_inline_candidates := true;
-			ev
+			end
 		| TArrayDecl el ->
 			let len = List.length el in
 			let io = mk_io (IOKArray(len)) in
@@ -1562,8 +1566,6 @@ let inline_constructors ctx e =
 				io.io_inlined <- true;
 				let el,_ = final_map r.r_inline in
 				let el = el @ get_iv_var_decls iv in
-				(*debugmsg "Here's where it all goes wrong" e.epos;
-				debugmsg (Type.s_expr Type.Printer.s_type r.r_inline) e.epos;*)
 				(el,Some io)
 			| {iv_state = IVSAliasing io} ->
 				[], (Some io)
