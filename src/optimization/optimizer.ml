@@ -1471,7 +1471,7 @@ let inline_constructors ctx e =
 				| e::el -> ignore(analyze_aliases true e); loop (el)
 				| [] -> None
 			in loop el
-		| TParenthesis e | TCast (e,None) ->
+		| TParenthesis e | TCast(e,None) | TMeta(_,e) ->
 			analyze_aliases captured e
 		| _ ->
 			let old = !scoped_ivs in
@@ -1600,6 +1600,15 @@ let inline_constructors ctx e =
 			| None ->
 				let e' = expr_list_to_expr el e'.etype e'.epos in
 				[mk (TCast (e',None)) e.etype e.epos], None
+			end
+		| TMeta (md,e') ->
+			let el, io = final_map e' in
+			begin match io with
+			| Some io ->
+				el, Some io
+			| None ->
+				let e' = expr_list_to_expr el e'.etype e'.epos in
+				[mk (TMeta (md,e')) e.etype e.epos], None
 			end
 		| _ ->
 			let f e =
