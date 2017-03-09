@@ -1297,9 +1297,9 @@ let inline_constructors ctx e =
 	in
 	let is_extern_ctor c cf = c.cl_extern || Meta.has Meta.Extern cf.cf_meta in
 	(* Pass 0 *)
-	let make_expr_for_list (el:texpr list) (t:t) : texpr = match el with
+	let make_expr_for_list (el:texpr list) (t:t) (p:pos): texpr = match el with
 		| [e] -> e
-		| _ -> mk (TBlock (el)) t e.epos
+		| _ -> mk (TBlock (el)) t p
 	in
 	let rec map_inline_objects (seen_ctors:tclass_field list) e = 
 		let mk_io (iok : inline_object_kind) : inline_object = {io_kind = iok; io_cancelled = false; io_declared = false; io_inlined = false; io_fields = PMap.empty; io_aliases = []; io_pos = e.epos} in
@@ -1320,7 +1320,7 @@ let inline_constructors ctx e =
 					| [] -> vs, (List.rev decls), (List.rev es)
 				in
 				let argvs, argvdecls, pl = loop ([],[],[]) pl in
-				let r_args =  make_expr_for_list argvdecls ctx.t.tvoid in
+				let r_args =  make_expr_for_list argvdecls ctx.t.tvoid e.epos in
 				let _, cname = c.cl_path in
 				let v = alloc_var ("inl"^cname) e.etype e.epos in
 				match type_inline ctx cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl ctx.t.tvoid None e.epos true with
@@ -1343,7 +1343,7 @@ let inline_constructors ctx e =
 					let el = List.rev (inlined_expr::el) in
 					let seen_ctors = cf :: seen_ctors in
 					let el = List.map (map_inline_objects seen_ctors) el in
-					let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_args = r_args;r_analyzed = false}) in
+					let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = r_args;r_analyzed = false}) in
 					set_iv_alias iv io;
 					found_inline_candidates := true;
 					ev
@@ -1363,7 +1363,7 @@ let inline_constructors ctx e =
 					let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
 					e
 				) fl in
-				let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
+				let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
 				set_iv_alias iv io;
 				found_inline_candidates := true;
 				ev
@@ -1388,7 +1388,7 @@ let inline_constructors ctx e =
 				mk (TBinop(OpAssign,ef,e)) e.etype e.epos
 			) el in
 			let el = (lenexpr::el) in
-			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
+			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
 			set_iv_alias iv io;
 			found_inline_candidates := true;
 			ev
