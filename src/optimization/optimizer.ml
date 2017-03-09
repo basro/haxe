@@ -1347,7 +1347,7 @@ let inline_constructors ctx e =
 					set_iv_alias iv io;
 					found_inline_candidates := true;
 					ev
-				| None -> e
+				| None -> Type.map_expr (map_inline_objects seen_ctors) e
 			end
 		| TObjectDecl fl when fl <> [] ->
 			let io = mk_io (IOKStructure) in
