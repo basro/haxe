@@ -1386,7 +1386,7 @@ let inline_constructors ctx e =
 			let el = List.mapi (fun i e ->
 				let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) e.etype e.epos in
 				let e = map_inline_objects seen_ctors e in
-				ignore(alloc_io_field io (int_field_name i) ctx.t.tint v.v_pos);
+				ignore(alloc_io_field io (int_field_name i) e.etype v.v_pos);
 				mk (TBinop(OpAssign,ef,e)) e.etype e.epos
 			) el in
 			let el = (lenexpr::el) in
