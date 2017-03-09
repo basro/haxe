@@ -1610,6 +1610,8 @@ let inline_constructors ctx e =
 				let e' = expr_list_to_expr el e'.etype e'.epos in
 				[mk (TCast (e',None)) e.etype e.epos], None
 			end
+		| TMeta((Meta.InlineConstructorArgument _,_,_),e) ->
+			final_map e
 		| TMeta (md,e') ->
 			let el, io = final_map e' in
 			begin match io with
