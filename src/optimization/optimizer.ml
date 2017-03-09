@@ -1483,13 +1483,15 @@ let inline_constructors ctx e =
 			with Not_found ->
 				None
 			end
-		| TParenthesis e | TCast(e,None) | TMeta(_,e) ->
+		| TCast(e',None) when begin try Type.unify e'.etype e.etype; true with Unify_error _ -> false end ->
+			analyze_aliases captured e'
+		| TParenthesis e | TMeta(_,e) ->
 			analyze_aliases captured e
 		| _ ->
 			let old = !scoped_ivs in
 			scoped_ivs := [];
-			let analyze_aliases_nocapture e = ignore(analyze_aliases false e) in
-			Type.iter analyze_aliases_nocapture e;
+			let f e = ignore(analyze_aliases false e) in
+			Type.iter f e;
 			List.iter (fun iv -> iv.iv_closed <- true) !scoped_ivs;
 			scoped_ivs := old;
 			None
