@@ -1305,13 +1305,13 @@ let inline_constructors ctx e =
 		| _ -> mk (TBlock (el)) t p
 	in
 	let rec map_inline_objects (seen_ctors:tclass_field list) e = 
+		let e = Type.map_expr (map_inline_objects seen_ctors) e in
 		let mk_io (iok : inline_object_kind) : inline_object = {io_kind = iok; io_cancelled = false; io_declared = false; io_inlined = false; io_fields = PMap.empty; io_aliases = []; io_pos = e.epos} in
 		let mk_emptyblock p = mk (TBlock []) ctx.t.tvoid p in
 		match e.eexpr with
 		| TConst(TString("debugon")) -> debugon := true; e
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl)
 			when List.length seen_ctors < 32 && not (List.memq cf seen_ctors) ->
-			let e = Type.map_expr (map_inline_objects seen_ctors) e in
 			begin
 				let rec loop (vs, decls, es) el = match el with
 					| e :: el ->
@@ -1347,7 +1347,8 @@ let inline_constructors ctx e =
 					let el = List.rev (inlined_expr::el) in
 					let seen_ctors = cf :: seen_ctors in
 					let el = List.map (map_inline_objects seen_ctors) el in
-					let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = r_args;r_analyzed = false}) in
+					let r_inline = make_expr_for_list el ctx.t.tvoid e.epos in
+					let iv = add v (IVKRoot {r_inline = r_inline; r_cancel = e; r_args = r_args;r_analyzed = false}) in
 					set_iv_alias iv io;
 					found_inline_candidates := true;
 					ev
@@ -1355,7 +1356,6 @@ let inline_constructors ctx e =
 			end
 		| TObjectDecl fl when fl <> [] ->
 			let io = mk_io (IOKStructure) in
-			let fl = List.map (fun (v,e) -> v, map_inline_objects seen_ctors e) fl in
 			let e = {e with eexpr = TObjectDecl fl} in
 			let v = alloc_var "inlobj" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
@@ -1387,7 +1387,6 @@ let inline_constructors ctx e =
 			in
 			let el = List.mapi (fun i e ->
 				let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) e.etype e.epos in
-				let e = map_inline_objects seen_ctors e in
 				ignore(alloc_io_field io (int_field_name i) e.etype v.v_pos);
 				mk (TBinop(OpAssign,ef,e)) e.etype e.epos
 			) el in
@@ -1397,7 +1396,7 @@ let inline_constructors ctx e =
 			found_inline_candidates := true;
 			ev
 		| _ ->
-			Type.map_expr (map_inline_objects seen_ctors) e
+			e
 	in
 	let e = map_inline_objects [] e in
 	if not !found_inline_candidates then e else
