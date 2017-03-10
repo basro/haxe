@@ -1310,10 +1310,10 @@ let inline_constructors ctx e =
 		| TConst(TString("debugon")) -> debugon := true; e
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl)
 			when List.length seen_ctors < 32 && not (List.memq cf seen_ctors) ->
+			let e = Type.map_expr (map_inline_objects seen_ctors) e in
 			begin
 				let rec loop (vs, decls, es) el = match el with
 					| e :: el ->
-						let e = map_inline_objects seen_ctors e in
 						let v = alloc_var "arg" e.etype e.epos in
 						let decle = mk (TVar(v, Some e)) ctx.t.tvoid e.epos in
 						let mde = (Meta.InlineConstructorArgument v.v_id), [], e.epos in
@@ -1329,16 +1329,17 @@ let inline_constructors ctx e =
 				| Some inlined_expr ->
 					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) in
 					(* add field inits here because the filter has not run yet (issue #2336) *)
-					
 					let ev = mk (TLocal v) v.v_type e.epos in
-					let el = List.fold_left (fun acc cf -> match cf.cf_kind,cf.cf_expr with
+					let el = List.fold_left (fun acc cf -> 
+						let fieldt = apply_params c.cl_params tl cf.cf_type in
+						match cf.cf_kind,cf.cf_expr with
 						| Var _,Some e ->
-							ignore(alloc_io_field io cf.cf_name cf.cf_type v.v_pos);
-							let ef = mk (TField(ev,FInstance(c,tl,cf))) cf.cf_type e.epos in
-							let e = mk (TBinop(OpAssign,ef,e)) cf.cf_type e.epos in
+							ignore(alloc_io_field io cf.cf_name fieldt v.v_pos);
+							let ef = mk (TField(ev,FInstance(c,tl,cf))) fieldt e.epos in
+							let e = mk (TBinop(OpAssign,ef,e)) fieldt e.epos in
 							e :: acc
 						| Var _, _ ->
-							ignore(alloc_io_field io cf.cf_name cf.cf_type v.v_pos);
+							ignore(alloc_io_field io cf.cf_name fieldt v.v_pos);
 							acc
 						| _ -> acc
 					) [] c.cl_ordered_fields in
@@ -1349,7 +1350,7 @@ let inline_constructors ctx e =
 					set_iv_alias iv io;
 					found_inline_candidates := true;
 					ev
-				| None -> Type.map_expr (map_inline_objects seen_ctors) e
+				| _ -> e
 			end
 		| TObjectDecl fl when fl <> [] ->
 			let io = mk_io (IOKStructure) in
