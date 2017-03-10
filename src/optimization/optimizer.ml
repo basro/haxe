@@ -1379,7 +1379,7 @@ let inline_constructors ctx e =
 			let ev = mk (TLocal v) v.v_type e.epos in
 			let lenexpr =
 				let vale = (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos) in
-				let ef = mk (TField(ev,FDynamic "length")) e.etype e.epos in
+				let ef = mk (TField(ev,FDynamic "length")) ctx.t.tint e.epos in
 				ignore(alloc_io_field io "length" ctx.t.tint v.v_pos);
 				mk (TBinop(OpAssign,ef,vale)) ctx.t.tint e.epos
 			in
