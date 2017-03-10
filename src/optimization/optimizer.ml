@@ -1486,7 +1486,7 @@ let inline_constructors ctx e =
 			with Not_found ->
 				None
 			end
-		| TCast(e',None) when begin try Type.unify e'.etype e.etype; true with Unify_error _ -> false end ->
+		| TCast(e',None) (*when begin try Type.unify e'.etype e.etype; true with Unify_error _ -> false end*) ->
 			analyze_aliases captured e'
 		| TParenthesis e | TMeta(_,e) ->
 			analyze_aliases captured e
