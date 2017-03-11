@@ -1494,8 +1494,13 @@ let inline_constructors ctx e =
 			with Not_found ->
 				None
 			end
-		| TCast(e',None) (*when begin try Type.unify e'.etype e.etype; true with Unify_error _ -> false end*) ->
-			analyze_aliases captured e'
+		| TCast(e',None) ->
+			begin match analyze_aliases captured e' with
+				| Some ({iv_state = IVSAliasing _} as iv) ->
+					begin try Type.unify e'.etype e.etype with Unify_error _ -> cancel_iv iv e.epos end;
+					Some iv
+				| ivo -> ivo
+			end
 		| TParenthesis e | TMeta(_,e) ->
 			analyze_aliases captured e
 		| _ ->
