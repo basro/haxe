@@ -492,8 +492,8 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 			{ e with eexpr = TFunction { tf_args = args; tf_expr = expr; tf_type = f.tf_type } }
 		| TCall({eexpr = TConst TSuper; etype = t},el) ->
 			begin match follow t with
-			| TInst({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)},_) ->
-				begin match type_inline ctx cf tf ethis el ctx.t.tvoid None po true with
+			| TInst({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,_) ->
+				begin match type_inline_ctor ctx c cf tf ethis el po with
 				| Some e -> map term e
 				| None -> error "Could not inline super constructor call" po
 				end
@@ -651,6 +651,27 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 			let rec map_expr_type e = Type.map_expr_type map_expr_type map_type map_var e in
 			Some (map_expr_type e)
 
+and type_inline_ctor ctx c cf tf ethis el po =
+	let field_inits = 
+		let cparams = List.map snd c.cl_params in
+		let ethis = mk (TConst TThis) (TInst (c,cparams)) c.cl_pos in
+		let el = List.fold_left (fun acc cf -> 
+			match cf.cf_kind,cf.cf_expr with
+			| Var _,Some e ->
+				let lhs = mk (TField(ethis,FInstance (c,List.map snd c.cl_params,cf))) cf.cf_type e.epos in
+				let eassign = mk (TBinop(OpAssign,lhs,e)) cf.cf_type e.epos in
+				eassign :: acc
+			| _ -> acc
+		) [] c.cl_ordered_fields in
+		List.rev el
+	in
+	let tf =
+		if field_inits = [] then tf
+		else
+			let bl = match tf.tf_expr with {eexpr = TBlock b } -> b | x -> [x] in
+			{tf with tf_expr = mk (TBlock (field_inits @ bl)) ctx.t.tvoid c.cl_pos}
+	in
+	type_inline ctx cf tf ethis el ctx.t.tvoid None po true
 
 (* ---------------------------------------------------------------------- *)
 (* LOOPS *)
@@ -1326,29 +1347,20 @@ let inline_constructors ctx e =
 				let r_args =  make_expr_for_list argvdecls ctx.t.tvoid e.epos in
 				let _, cname = c.cl_path in
 				let v = alloc_var ("inl"^cname) e.etype e.epos in
-				match type_inline ctx cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl ctx.t.tvoid None e.epos true with
+				match type_inline_ctor ctx c cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl e.epos with
 				| Some inlined_expr ->
 					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) in
-					(* add field inits here because the filter has not run yet (issue #2336) *)
 					let ev = mk (TLocal v) v.v_type e.epos in
-					let el = List.fold_left (fun acc cf -> 
-						let fieldt = apply_params c.cl_params tl cf.cf_type in
+					List.iter (fun cf -> 
 						match cf.cf_kind,cf.cf_expr with
-						| Var _,Some e ->
-							ignore(alloc_io_field io cf.cf_name fieldt v.v_pos);
-							let ef = mk (TField(ev,FInstance(c,tl,cf))) fieldt e.epos in
-							let e = mk (TBinop(OpAssign,ef,e)) fieldt e.epos in
-							e :: acc
 						| Var _, _ ->
+							let fieldt = apply_params c.cl_params tl cf.cf_type in
 							ignore(alloc_io_field io cf.cf_name fieldt v.v_pos);
-							acc
-						| _ -> acc
-					) [] c.cl_ordered_fields in
-					let el = List.rev (inlined_expr::el) in
+						| _ -> ()
+					) c.cl_ordered_fields;
 					let seen_ctors = cf :: seen_ctors in
-					let el = List.map (map_inline_objects seen_ctors) el in
-					let r_inline = make_expr_for_list el ctx.t.tvoid e.epos in
-					let iv = add v (IVKRoot {r_inline = r_inline; r_cancel = e; r_args = r_args;r_analyzed = false}) in
+					let inlined_expr = map_inline_objects seen_ctors inlined_expr in
+					let iv = add v (IVKRoot {r_inline = inlined_expr; r_cancel = e; r_args = r_args;r_analyzed = false}) in
 					set_iv_alias iv io;
 					found_inline_candidates := true;
 					ev
