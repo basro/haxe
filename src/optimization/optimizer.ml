@@ -1352,13 +1352,19 @@ let inline_constructors ctx e =
 				| Some inlined_expr ->
 					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) in
 					let ev = mk (TLocal v) v.v_type e.epos in
-					List.iter (fun cf -> 
-						match cf.cf_kind,cf.cf_expr with
-						| Var _, _ ->
-							let fieldt = apply_params c.cl_params tl cf.cf_type in
-							ignore(alloc_io_field io cf.cf_name fieldt v.v_pos);
-						| _ -> ()
-					) c.cl_ordered_fields;
+					let rec loop (c:tclass) (tl:t list) = 
+						let apply = apply_params c.cl_params tl in
+						List.iter (fun cf -> 
+							match cf.cf_kind,cf.cf_expr with
+							| Var _, _ ->
+								let fieldt = apply cf.cf_type in
+								ignore(alloc_io_field io cf.cf_name fieldt v.v_pos);
+							| _ -> ()
+						) c.cl_ordered_fields;
+						match c.cl_super with
+						| Some (c,tl) -> loop c (List.map apply tl)
+						| None -> ()
+					in loop c tl;
 					let seen_ctors = cf :: seen_ctors in
 					let inlined_expr = map_inline_objects seen_ctors inlined_expr in
 					let iv = add v (IVKRoot {r_inline = inlined_expr; r_cancel = e; r_args = r_args;r_analyzed = false}) in
