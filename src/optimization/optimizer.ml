@@ -651,6 +651,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 			let rec map_expr_type e = Type.map_expr_type map_expr_type map_type map_var e in
 			Some (map_expr_type e)
 
+(* Same as type_inline, but modifies the function body to add field inits *)
 and type_inline_ctor ctx c cf tf ethis el po =
 	let field_inits = 
 		let cparams = List.map snd c.cl_params in
