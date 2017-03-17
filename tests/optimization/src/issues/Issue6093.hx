@@ -17,7 +17,7 @@ class Issue6093 {
 		a_y = 2;
 		a_x = 1;
 	')
-	@:analyzer(no_const_propagation, no_fusion)
+	@:analyzer(ignore)
 	static public function main() {
 		var a = new B();
 	}
