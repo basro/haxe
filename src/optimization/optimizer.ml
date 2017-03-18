@@ -1337,11 +1337,15 @@ let inline_constructors ctx e =
 			begin
 				let rec loop (vs, decls, es) el = match el with
 					| e :: el ->
-						let v = alloc_var "arg" e.etype e.epos in
-						let decle = mk (TVar(v, Some e)) ctx.t.tvoid e.epos in
-						let mde = (Meta.InlineConstructorArgument v.v_id), [], e.epos in
-						let e = mk (TMeta(mde, e)) e.etype e.epos in
-						loop (v::vs, decle::decls, e::es) el
+						begin match e.eexpr with
+						| TConst _ -> loop (vs, decls, e::es) el
+						| _ -> 
+							let v = alloc_var "arg" e.etype e.epos in
+							let decle = mk (TVar(v, Some e)) ctx.t.tvoid e.epos in
+							let mde = (Meta.InlineConstructorArgument v.v_id), [], e.epos in
+							let e = mk (TMeta(mde, e)) e.etype e.epos in
+							loop (v::vs, decle::decls, e::es) el
+						end
 					| [] -> vs, (List.rev decls), (List.rev es)
 				in
 				let argvs, argvdecls, pl = loop ([],[],[]) pl in
