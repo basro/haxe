@@ -1206,7 +1206,7 @@ and inline_object = {
 and inline_root_data = {r_inline : texpr; r_cancel : texpr; r_args : texpr; mutable r_analyzed : bool}
 
 and inline_var_kind =
-	| IVKField of inline_object * string
+	| IVKField of inline_object * string * texpr option
 	| IVKLocal
 	| IVKRoot of inline_root_data
 
@@ -1271,7 +1271,7 @@ let inline_constructors ctx e =
 			| _ -> ()
 			end;
 			let remove = match iv.iv_kind with
-				| IVKField(io,_) -> io.io_cancelled
+				| IVKField(io,_,_) -> io.io_cancelled
 				| IVKLocal -> true
 				| IVKRoot _ -> false
 			in
@@ -1309,19 +1309,24 @@ let inline_constructors ctx e =
 	let get_io_field (io:inline_object) (s:string) : inline_var =
 		PMap.find s io.io_fields
 	in
-	let alloc_io_field (io:inline_object) (fname:string) (t:t) (p:pos) : inline_var =
+	let alloc_io_field_full (io:inline_object) (fname:string) (constexpr_option:texpr option) (t:t) (p:pos) : inline_var =
 		let v = alloc_var fname t p in
 		v.v_meta <- (Meta.InlineConstructorVariable,[],p) :: v.v_meta;
-		let iv = add v (IVKField (io,fname)) in
+		let iv = add v (IVKField (io,fname,constexpr_option)) in
 		io.io_fields <- PMap.add fname iv io.io_fields;
 		iv
 	in
+	let alloc_const_io_field (io:inline_object) (fname:string) (constexpr:texpr) : inline_var =
+		let iv = alloc_io_field_full io fname (Some constexpr) constexpr.etype constexpr.epos in
+		iv.iv_state <- IVSCancelled;
+		iv
+	in
+	let alloc_io_field (io:inline_object) (fname:string) (t:t) (p:pos) : inline_var = alloc_io_field_full io fname None t p in
 	let int_field_name i =
 		if i < 0 then "n" ^ (string_of_int (-i))
 		else (string_of_int i)
 	in
 	let is_extern_ctor c cf = c.cl_extern || Meta.has Meta.Extern cf.cf_meta in
-	(* Pass 0 *)
 	let make_expr_for_list (el:texpr list) (t:t) (p:pos): texpr = match el with
 		| [e] -> e
 		| _ -> mk (TBlock (el)) t p
@@ -1402,18 +1407,12 @@ let inline_constructors ctx e =
 			let io = mk_io (IOKArray(len)) in
 			let v = alloc_var "inlarr" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
-			let lenexpr =
-				let vale = (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos) in
-				let ef = mk (TField(ev,FDynamic "length")) ctx.t.tint e.epos in
-				ignore(alloc_io_field io "length" ctx.t.tint v.v_pos);
-				mk (TBinop(OpAssign,ef,vale)) ctx.t.tint e.epos
-			in
+			alloc_const_io_field io "length" (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos);
 			let el = List.mapi (fun i e ->
 				let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) e.etype e.epos in
 				ignore(alloc_io_field io (int_field_name i) e.etype v.v_pos);
 				mk (TBinop(OpAssign,ef,e)) e.etype e.epos
 			) el in
-			let el = (lenexpr::el) in
 			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
 			set_iv_alias iv io;
 			found_inline_candidates := true;
@@ -1540,6 +1539,7 @@ let inline_constructors ctx e =
 		| {iv_state = IVSAliasing io} when not io.io_declared ->
 			io.io_declared <- true;
 			PMap.foldi (fun _ iv acc -> (get_iv_var_decls iv)@acc) io.io_fields []
+		| {iv_kind = IVKField(_,_,Some _)} -> []
 		| {iv_state = IVSCancelled} ->
 			let v = iv.iv_var in
 			[(mk (TVar(v,None)) ctx.t.tvoid v.v_pos)]
@@ -1571,12 +1571,16 @@ let inline_constructors ctx e =
 			let (tel, thiso) = final_map te in
 			begin match thiso with
 			| Some io ->
-				begin match get_io_field io (field_name fa) with
+				let fname = field_name fa in
+				begin match get_io_field io fname with
 				| {iv_state = IVSAliasing io} ->
 					tel, Some io
 				| iv ->
-					let local = (mk (TLocal iv.iv_var) e.etype e.epos) in
-					(local::tel), None
+					let newexpr = match iv.iv_kind with
+						| IVKField(_,_,Some constexpr) -> {constexpr with epos = e.epos}
+						| _ -> mk (TLocal iv.iv_var) e.etype e.epos
+					in
+					(newexpr::tel), None
 				end
 			| None ->
 				let te = expr_list_to_expr tel te.etype te.epos in
@@ -1666,7 +1670,7 @@ let inline_constructors ctx e =
 	let el,_ = final_map e in
 	let e = expr_list_to_expr el e.etype e.epos in
 	let rec get_pretty_name iv = match iv.iv_kind with
-		| IVKField(io,fname) ->
+		| IVKField(io,fname,None) ->
 			(get_pretty_name (List.hd io.io_aliases)) ^ "_" ^ fname;
 		| _ -> iv.iv_var.v_name
 	in
