@@ -1403,20 +1403,24 @@ let inline_constructors ctx e =
 				e
 			end
 		| TArrayDecl el ->
-			let len = List.length el in
-			let io = mk_io (IOKArray(len)) in
-			let v = alloc_var "inlarr" e.etype e.epos in
-			let ev = mk (TLocal v) v.v_type e.epos in
-			alloc_const_io_field io "length" (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos);
-			let el = List.mapi (fun i e ->
-				let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) e.etype e.epos in
-				ignore(alloc_io_field io (int_field_name i) e.etype v.v_pos);
-				mk (TBinop(OpAssign,ef,e)) e.etype e.epos
-			) el in
-			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
-			set_iv_alias iv io;
-			found_inline_candidates := true;
-			ev
+			begin match e.etype with 
+			| TInst(_, [elemtype]) ->
+				let len = List.length el in
+				let io = mk_io (IOKArray(len)) in
+				let v = alloc_var "inlarr" e.etype e.epos in
+				let ev = mk (TLocal v) v.v_type e.epos in
+				alloc_const_io_field io "length" (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos);
+				let el = List.mapi (fun i e ->
+					let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) elemtype e.epos in
+					ignore(alloc_io_field io (int_field_name i) elemtype v.v_pos);
+					mk (TBinop(OpAssign,ef,e)) elemtype e.epos
+				) el in
+				let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
+				set_iv_alias iv io;
+				found_inline_candidates := true;
+				ev
+			| _ -> e
+			end
 		| _ ->
 			e
 	in
