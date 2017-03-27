@@ -43,7 +43,6 @@
 *)
 
 open Printf
-open Genswf
 open Common
 open Common.DisplayMode
 open Type
@@ -298,7 +297,7 @@ module Initialize = struct
 					com.net_libs <- [];
 					old_flush()
 				);
-				Gencs.before_generate com;
+				Dotnet.before_generate com;
 				add_std "cs"; "cs"
 			| Java ->
 				let old_flush = ctx.flush in
@@ -307,7 +306,7 @@ module Initialize = struct
 					com.java_libs <- [];
 					old_flush()
 				);
-				Genjava.before_generate com;
+				Java.before_generate com;
 				add_std "java"; "java"
 			| Python ->
 				add_std "python";
@@ -462,7 +461,7 @@ let rec process_params create pl =
 and init ctx =
 	let usage = Printf.sprintf
 		"Haxe Compiler %s - (C)2005-2017 Haxe Foundation\n Usage : haxe%s -main <class> [-swf|-js|-neko|-php|-cpp|-cppia|-as3|-cs|-java|-python|-hl|-lua] <output> [options]\n Options :"
-		Globals.s_version (if Sys.os_type = "Win32" then ".exe" else "")
+		s_version (if Sys.os_type = "Win32" then ".exe" else "")
 	in
 	let com = ctx.com in
 	let classes = ref [([],"Std")] in
@@ -596,14 +595,14 @@ try
 		),"<header> : define SWF header (width:height:fps:color)");
 		("-swf-lib",Arg.String (fun file ->
 			process_libs(); (* linked swf order matters, and lib might reference swf as well *)
-			Genswf.add_swf_lib com file false
+			SwfLoader.add_swf_lib com file false
 		),"<file> : add the SWF library to the compiled SWF");
 		("-swf-lib-extern",Arg.String (fun file ->
-			Genswf.add_swf_lib com file true
+			SwfLoader.add_swf_lib com file true
 		),"<file> : use the SWF library for type checking");
 		("-java-lib",Arg.String (fun file ->
 			let std = file = "lib/hxjava-std.jar" in
-			arg_delays := (fun () -> Genjava.add_java_lib com file std) :: !arg_delays;
+			arg_delays := (fun () -> Java.add_java_lib com file std) :: !arg_delays;
 		),"<file> : add an external JAR or class directory library");
 		("-net-lib",Arg.String (fun file ->
 			let file, is_std = match ExtString.String.nsplit file "@" with
@@ -613,10 +612,10 @@ try
 					file,true
 				| _ -> raise Exit
 			in
-			arg_delays := (fun () -> Gencs.add_net_lib com file is_std) :: !arg_delays;
+			arg_delays := (fun () -> Dotnet.add_net_lib com file is_std) :: !arg_delays;
 		),"<file>[@std] : add an external .NET DLL file");
 		("-net-std",Arg.String (fun file ->
-			Gencs.add_net_std com file
+			Dotnet.add_net_std com file
 		),"<file> : add a root std .NET DLL search path");
 		("-c-arg",Arg.String (fun arg ->
 			com.c_args <- arg :: com.c_args
@@ -732,7 +731,7 @@ try
 			assert false
 		),"<dir> : set current working directory");
 		("-version",Arg.Unit (fun() ->
-			message ctx Globals.s_version null_pos;
+			message ctx s_version null_pos;
 			did_something := true;
 		),": print version and exit");
 		("--help-defines", Arg.Unit (fun() ->
