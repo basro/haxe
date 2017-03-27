@@ -1458,7 +1458,8 @@ let inline_constructors ctx e =
 				begin try
 					let fiv = get_io_field io (field_name fa) in
 					if not (type_iseq_strict fiv.iv_var.v_type e.etype) then raise Not_found;
-					if not allow_unassigned && (fiv.iv_state == IVSUnassigned || fiv.iv_closed) then raise Not_found;
+					let iv_is_const iv = match iv.iv_kind with IVKField(_,_,Some(_)) -> true | _ -> false in
+					if not allow_unassigned && (fiv.iv_state == IVSUnassigned || fiv.iv_closed || iv_is_const fiv) then raise Not_found;
 					if fiv.iv_closed || not captured then cancel_iv fiv e.epos;
 					Some(fiv)
 				with Not_found ->
@@ -1478,7 +1479,8 @@ let inline_constructors ctx e =
 					let fname = int_field_name i in
 					let fiv = get_io_field io fname in
 					if not (type_iseq_strict fiv.iv_var.v_type e.etype) then raise Not_found;
-					if not allow_unassigned && (fiv.iv_state == IVSUnassigned || fiv.iv_closed) then raise Not_found;
+					let iv_is_const iv = match iv.iv_kind with IVKField(_,_,Some(_)) -> true | _ -> false in
+					if not allow_unassigned && (fiv.iv_state == IVSUnassigned || fiv.iv_closed || iv_is_const fiv) then raise Not_found;
 					if fiv.iv_closed || not captured then cancel_iv fiv e.epos;
 					Some(fiv)
 				with Not_found ->
