@@ -1510,14 +1510,7 @@ let inline_constructors ctx e =
 			with Not_found ->
 				None
 			end
-		| TCast(e',None) ->
-			begin match analyze_aliases captured e' with
-				| Some ({iv_state = IVSAliasing _} as iv) ->
-					begin try Type.unify e'.etype e.etype with Unify_error _ -> cancel_iv iv e.epos end;
-					Some iv
-				| ivo -> ivo
-			end
-		| TParenthesis e | TMeta(_,e) ->
+		| TParenthesis e | TMeta(_,e) | TCast(e,None) ->
 			analyze_aliases captured e
 		| _ ->
 			let old = !scoped_ivs in
