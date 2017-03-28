@@ -1409,7 +1409,7 @@ let inline_constructors ctx e =
 				let io = mk_io (IOKArray(len)) in
 				let v = alloc_var "inlarr" e.etype e.epos in
 				let ev = mk (TLocal v) v.v_type e.epos in
-				(*alloc_const_io_field io "length" (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos);*)
+				alloc_const_io_field io "length" (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos);
 				let el = List.mapi (fun i e ->
 					let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) elemtype e.epos in
 					ignore(alloc_io_field io (int_field_name i) elemtype v.v_pos);
