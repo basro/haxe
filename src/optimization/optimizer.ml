@@ -1425,6 +1425,27 @@ let inline_constructors ctx e =
 	let rec analyze_aliases (captured:bool) (is_lvalue:bool) (e:texpr) : inline_var option =
 		let analyze_aliases_in_lvalue e = analyze_aliases true true e in
 		let analyze_aliases captured e = analyze_aliases captured false e in
+		let handle_field_case te fname validate_io =
+			begin match analyze_aliases true te with
+			| Some({iv_state = IVSAliasing io} as iv) when validate_io io ->
+				begin try
+					let fiv = get_io_field io fname in
+					if not (type_iseq_strict fiv.iv_var.v_type e.etype) then raise Not_found;
+					let iv_is_const iv = match iv.iv_kind with IVKField(_,_,Some(_)) -> true | _ -> false in
+					if is_lvalue && iv_is_const fiv then raise Not_found;
+					if fiv.iv_closed then raise Not_found;
+					if not captured || (not is_lvalue && fiv.iv_state == IVSUnassigned) then cancel_iv fiv e.epos;
+					Some(fiv)
+				with Not_found ->
+					cancel_iv iv e.epos;
+					None
+				end
+			| Some(iv) ->
+				cancel_iv iv e.epos;
+				None
+			| _ -> None
+			end
+		in
 		match e.eexpr with
 		| TVar(v,None) -> ignore(add v IVKLocal); None
 		| TVar(v,Some rve) ->
@@ -1449,47 +1470,11 @@ let inline_constructors ctx e =
 			| _ -> ignore(analyze_aliases false rve); None
 			end
 		| TField(te, fa) ->
-			begin match analyze_aliases true te with
-			| Some({iv_state = IVSAliasing io} as iv) ->
-				begin try
-					let fiv = get_io_field io (field_name fa) in
-					if not (type_iseq_strict fiv.iv_var.v_type e.etype) then raise Not_found;
-					let iv_is_const iv = match iv.iv_kind with IVKField(_,_,Some(_)) -> true | _ -> false in
-					if is_lvalue && iv_is_const fiv then raise Not_found;
-					if fiv.iv_closed then raise Not_found;
-					if not captured || (not is_lvalue && fiv.iv_state == IVSUnassigned) then cancel_iv fiv e.epos;
-					Some(fiv)
-				with Not_found ->
-					cancel_iv iv e.epos;
-					None
-				end
-			| Some(iv) ->
-				cancel_iv iv e.epos;
-				None
-			| _ -> None
-			end
+			handle_field_case te (field_name fa) (fun _ -> true)
 		| TArray(te,{eexpr = TConst (TInt i)}) ->
 			let i = Int32.to_int i in
-			begin match analyze_aliases true te with
-			| Some({iv_state = IVSAliasing({io_kind = IOKArray(l)} as io)} as iv) when i >= 0 && i < l ->
-				begin try
-					let fname = int_field_name i in
-					let fiv = get_io_field io fname in
-					if not (type_iseq_strict fiv.iv_var.v_type e.etype) then raise Not_found;
-					let iv_is_const iv = match iv.iv_kind with IVKField(_,_,Some(_)) -> true | _ -> false in
-					if is_lvalue && iv_is_const fiv then raise Not_found;
-					if fiv.iv_closed then raise Not_found;
-					if not captured || (not is_lvalue && fiv.iv_state == IVSUnassigned) then cancel_iv fiv e.epos;
-					Some(fiv)
-				with Not_found ->
-					cancel_iv iv e.epos;
-					None
-				end
-			| Some(iv) ->
-				cancel_iv iv e.epos;
-				None
-			| _ -> None
-			end
+			let validate_io io = match io.io_kind with IOKArray(l) when i >= 0 && i < l -> true | _ -> false in
+			handle_field_case te (int_field_name i) validate_io
 		| TLocal(v) when v.v_id < 0 ->
 			let iv = get_iv v.v_id in
 			begin match iv with
