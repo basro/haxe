@@ -1165,12 +1165,8 @@ let rec make_constant_expression ctx ?(concat_strings=false) e =
 
 let basro_flatten_filter ctx e =
 	let rec loop e = match e.eexpr with
-	| TParenthesis({eexpr = TParenthesis(e)}) ->
+	| TBlock({eexpr = (TConst(TString("debugon")))}::el) -> 
 		prerr_endline (Type.s_expr Type.Printer.s_type e); e
-		(* let result = basro_flatten_expr2 ctx e in 
-		prerr_endline "\n->\n";
-		prerr_endline (Type.s_expr Type.Printer.s_type result);
-		result *)
 	| _ -> Type.map_expr loop e
 	in loop e
 
