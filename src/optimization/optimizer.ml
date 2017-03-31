@@ -1642,13 +1642,6 @@ let inline_constructors ctx e =
 			v.v_name <- get_pretty_name iv
 		end
 	) !vars;
-	if !debugon then begin
-		prerr_endline " ";
-		prerr_endline "------------------------";
-		prerr_endline (Type.s_expr Type.Printer.s_type e);
-		prerr_endline "------------------------";
-		prerr_endline " ";
-	end;
 	e
 
 (* ---------------------------------------------------------------------- *)
