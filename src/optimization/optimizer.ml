@@ -1224,7 +1224,6 @@ and inline_var = {
 }
 
 let inline_constructors ctx e =
-	let found_inline_candidates = ref false in
 	let is_valid_ident s =
 		try
 			if String.length s = 0 then raise Exit;
@@ -1381,7 +1380,6 @@ let inline_constructors ctx e =
 					let inlined_expr = map_inline_objects seen_ctors inlined_expr in
 					let iv = add v (IVKRoot {r_inline = inlined_expr; r_cancel = e; r_args = r_args;r_analyzed = false}) in
 					set_iv_alias iv io;
-					found_inline_candidates := true;
 					ev
 				| _ -> e
 			end
@@ -1400,7 +1398,6 @@ let inline_constructors ctx e =
 				) fl in
 				let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
 				set_iv_alias iv io;
-				found_inline_candidates := true;
 				ev
 			with Exit ->
 				e
@@ -1420,7 +1417,6 @@ let inline_constructors ctx e =
 				) el in
 				let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
 				set_iv_alias iv io;
-				found_inline_candidates := true;
 				ev
 			| _ -> e
 			end
@@ -1428,7 +1424,7 @@ let inline_constructors ctx e =
 			e
 	in
 	let e = map_inline_objects [] e in
-	if not !found_inline_candidates then e else
+	if IntMap.is_empty !vars then e else
 	let rec analyze_aliases (captured:bool) (is_lvalue:bool) (e:texpr) : inline_var option =
 		let analyze_aliases_in_lvalue e = analyze_aliases true true e in
 		let analyze_aliases captured e = analyze_aliases captured false e in
