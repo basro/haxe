@@ -1199,7 +1199,12 @@ and inline_object = {
 	mutable io_fields : (string,inline_var) PMap.t;
 }
 
-and inline_root_data = {r_inline : texpr; r_cancel : texpr; r_args : texpr; mutable r_analyzed : bool}
+and inline_root_data = {
+	r_inline : texpr;
+	r_cancel : texpr;
+	r_args : texpr;
+	mutable r_analyzed : bool
+}
 
 and inline_var_kind =
 	| IVKField of inline_object * string * texpr option
