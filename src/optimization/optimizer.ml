@@ -1520,14 +1520,14 @@ let inline_constructors ctx e =
 		match iv with
 		| {iv_state = IVSAliasing io} when not io.io_declared ->
 			io.io_declared <- true;
-			PMap.foldi (fun _ iv acc -> (get_iv_var_decls iv)@acc) io.io_fields []
+			PMap.foldi (fun _ iv acc -> acc@(get_iv_var_decls iv)) io.io_fields []
 		| {iv_kind = IVKField(_,_,Some _)} -> []
 		| {iv_state = IVSCancelled} ->
 			let v = iv.iv_var in
 			[(mk (TVar(v,None)) ctx.t.tvoid v.v_pos)]
 		| _ -> []
 	in
-	let rec final_map (e:texpr) : ((texpr list) * (inline_object option)) = 
+	let rec final_map  ?(unwrap_block = false) (e:texpr) : ((texpr list) * (inline_object option)) = 
 		match e.eexpr with 
 		| TVar(v, None) when v.v_id < 0 ->
 			(get_iv_var_decls (get_iv v.v_id)), None
@@ -1592,7 +1592,7 @@ let inline_constructors ctx e =
 				(el, None)
 			| {iv_state = IVSAliasing io; iv_kind = IVKRoot r} as iv when not io.io_inlined ->
 				io.io_inlined <- true;
-				let el,_ = final_map r.r_inline in
+				let el,_ = final_map ~unwrap_block:true r.r_inline in
 				let el = el @ get_iv_var_decls iv in
 				(el,Some io)
 			| {iv_state = IVSAliasing io} ->
@@ -1611,8 +1611,8 @@ let inline_constructors ctx e =
 					loop (el'@acc) el
 			in
 			let el, io = loop [] el in
-			let el = List.rev el in
-			[mk (TBlock el) e.etype e.epos], io
+			let el = if unwrap_block then el else [mk (TBlock (List.rev el)) e.etype e.epos] in
+			el, io
 		| TParenthesis e' ->
 			let el, io = final_map e' in
 			begin match io with
