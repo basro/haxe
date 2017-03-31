@@ -1543,7 +1543,7 @@ let inline_constructors ctx e =
 			| None ->
 				let rve = expr_list_to_expr rvel rve.etype rve.epos in
 				begin match lvel with
-				| [] -> raise Not_found (* TODO: Custom error *)
+				| [] -> assert false
 				| e::el -> 
 					let e = mk (TBinop(OpAssign, e, rve)) e.etype e.epos in
 					(e::el), None
@@ -1613,34 +1613,16 @@ let inline_constructors ctx e =
 			let el, io = loop [] el in
 			let el = if unwrap_block then el else [mk (TBlock (List.rev el)) e.etype e.epos] in
 			el, io
-		| TParenthesis e' ->
-			let el, io = final_map e' in
-			begin match io with
-			| Some io ->
-				el, Some io
-			| None ->
-				let e' = expr_list_to_expr el e'.etype e'.epos in
-				[mk (TParenthesis e') e.etype e.epos], None
-			end
-		| TCast (e',None) ->
-			let el, io = final_map e' in
-			begin match io with
-			| Some io ->
-				el, Some io
-			| None ->
-				let e' = expr_list_to_expr el e'.etype e'.epos in
-				[mk (TCast (e',None)) e.etype e.epos], None
-			end
 		| TMeta((Meta.InlineConstructorArgument _,_,_),e) ->
 			final_map e
-		| TMeta (md,e') ->
+		| TParenthesis e' | TCast(e',None) | TMeta(_,e') ->
 			let el, io = final_map e' in
 			begin match io with
 			| Some io ->
 				el, Some io
 			| None ->
 				let e' = expr_list_to_expr el e'.etype e'.epos in
-				[mk (TMeta (md,e')) e.etype e.epos], None
+				[Type.map_expr (fun _ -> e') e], None
 			end
 		| _ ->
 			let f e =
