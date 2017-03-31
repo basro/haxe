@@ -1493,12 +1493,7 @@ let inline_constructors ctx e =
 				| [] -> None
 			in loop el
 		| TMeta((Meta.InlineConstructorArgument vid,_,_),_) ->
-			begin try
-				let iv = get_iv vid in
-				Some iv
-			with Not_found ->
-				None
-			end
+			(try Some(get_iv vid) with Not_found -> None)
 		| TParenthesis e | TMeta(_,e) | TCast(e,None) ->
 			analyze_aliases captured e
 		| _ ->
