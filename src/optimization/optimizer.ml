@@ -1324,9 +1324,11 @@ let inline_constructors ctx e =
 	in
 	let is_extern_ctor c cf = c.cl_extern || Meta.has Meta.Extern cf.cf_meta in
 	let make_expr_for_list (el:texpr list) (t:t) (p:pos): texpr = match el with
+		| [] -> mk (TBlock[]) ctx.t.tvoid p
 		| [e] -> e
 		| _ -> mk (TBlock (el)) t p
 	in
+	let make_expr_for_rev_list (el:texpr list) (t:t) (p:pos) : texpr = make_expr_for_list (List.rev el) t p in
 	let rec map_inline_objects (seen_ctors:tclass_field list) e = 
 		let e = Type.map_expr (map_inline_objects seen_ctors) e in
 		let mk_io (iok : inline_object_kind) : inline_object = {io_kind = iok; io_cancelled = false; io_declared = false; io_inlined = false; io_fields = PMap.empty; io_aliases = []; io_pos = e.epos} in
@@ -1506,11 +1508,6 @@ let inline_constructors ctx e =
 			None
 	in
 	ignore(analyze_aliases false false e);
-	let expr_list_to_expr el t p = match el with
-		| [] -> mk (TBlock[]) ctx.t.tvoid p
-		| [e] -> e
-		| _ -> mk (TBlock (List.rev el)) t p
-	in
 	let rec get_iv_var_decls (iv:inline_var) : texpr list =
 		match iv with
 		| {iv_state = IVSAliasing io} when not io.io_declared ->
@@ -1536,7 +1533,7 @@ let inline_constructors ctx e =
 			| Some(io) ->
 				(rvel@lvel), lvo
 			| None ->
-				let rve = expr_list_to_expr rvel rve.etype rve.epos in
+				let rve = make_expr_for_rev_list rvel rve.etype rve.epos in
 				begin match lvel with
 				| [] -> assert false
 				| e::el -> 
@@ -1560,7 +1557,7 @@ let inline_constructors ctx e =
 					(newexpr::tel), None
 				end
 			| None ->
-				let te = expr_list_to_expr tel te.etype te.epos in
+				let te = make_expr_for_rev_list tel te.etype te.epos in
 				[mk (TField(te, fa)) e.etype e.epos], None
 			end
 		| TArray(te, ({eexpr = TConst (TInt i)} as indexexpr)) ->
@@ -1577,7 +1574,7 @@ let inline_constructors ctx e =
 					(local::tel), None
 				end
 			| None ->
-				let te = expr_list_to_expr tel te.etype te.epos in
+				let te = make_expr_for_rev_list tel te.etype te.epos in
 				[mk (TArray(te, indexexpr)) e.etype e.epos], None
 			end
 		| TLocal v when v.v_id < 0 ->
@@ -1616,18 +1613,18 @@ let inline_constructors ctx e =
 			| Some io ->
 				el, Some io
 			| None ->
-				let e' = expr_list_to_expr el e'.etype e'.epos in
+				let e' = make_expr_for_rev_list el e'.etype e'.epos in
 				[Type.map_expr (fun _ -> e') e], None
 			end
 		| _ ->
 			let f e =
 				let (el,_) = final_map e in
-				expr_list_to_expr el e.etype e.epos
+				make_expr_for_rev_list el e.etype e.epos
 			in
 			([Type.map_expr f e], None)
 	in
 	let el,_ = final_map e in
-	let e = expr_list_to_expr el e.etype e.epos in
+	let e = make_expr_for_rev_list el e.etype e.epos in
 	let rec get_pretty_name iv = match iv.iv_kind with
 		| IVKField(io,fname,None) ->
 			(get_pretty_name (List.hd io.io_aliases)) ^ "_" ^ fname;
