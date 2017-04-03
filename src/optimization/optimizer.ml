@@ -1520,7 +1520,7 @@ let inline_constructors ctx e =
 			[(mk (TVar(v,None)) ctx.t.tvoid v.v_pos)]
 		| _ -> []
 	in
-	let rec final_map  ?(unwrap_block = false) (e:texpr) : ((texpr list) * (inline_object option)) = 
+	let rec final_map ?(unwrap_block = false) (e:texpr) : ((texpr list) * (inline_object option)) = 
 		match e.eexpr with 
 		| TVar(v, None) when v.v_id < 0 ->
 			(get_iv_var_decls (get_iv v.v_id)), None
