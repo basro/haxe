@@ -1383,25 +1383,20 @@ let inline_constructors ctx e =
 					ev
 				| _ -> e
 			end
-		| TObjectDecl fl when fl <> [] ->
+		| TObjectDecl fl when fl <> [] && List.for_all (fun(s,_) -> is_valid_ident s) fl ->
 			let io = mk_io (IOKStructure) in
 			let e = {e with eexpr = TObjectDecl fl} in
 			let v = alloc_var "inlobj" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
-			begin try
-				let el = List.map (fun (s,e) ->
-					if not (is_valid_ident s) then raise Exit;
-					ignore(alloc_io_field io s e.etype v.v_pos);
-					let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
-					let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
-					e
-				) fl in
-				let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
-				set_iv_alias iv io;
-				ev
-			with Exit ->
+			let el = List.map (fun (s,e) ->
+				ignore(alloc_io_field io s e.etype v.v_pos);
+				let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
+				let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
 				e
-			end
+			) fl in
+			let iv = add v (IVKRoot {r_inline = make_expr_for_list el ctx.t.tvoid e.epos; r_cancel = e; r_args = mk_emptyblock e.epos; r_analyzed = false}) in
+			set_iv_alias iv io;
+			ev
 		| TArrayDecl el ->
 			begin match e.etype with 
 			| TInst(_, [elemtype]) ->
