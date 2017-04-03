@@ -754,6 +754,43 @@ let remove_extern_fields ctx t = match t with
 	| _ ->
 		()
 
+
+module VarLazifier = struct
+	let apply com e =
+		let rec loop var_inits e = match e.eexpr with
+			| TVar(v,Some e1) when (Meta.has (Meta.Custom ":extractorVariable") v.v_meta) ->
+				let var_inits,e1 = loop var_inits e1 in
+				let var_inits = PMap.add v.v_id e1 var_inits in
+				var_inits,{e with eexpr = TVar(v,None)}
+			| TLocal v ->
+				begin try
+					let e_init = PMap.find v.v_id var_inits in
+					let e = {e with eexpr = TBinop(OpAssign,e,e_init)} in
+					let e = {e with eexpr = TParenthesis e} in
+					let var_inits = PMap.remove v.v_id var_inits in
+					var_inits,e
+				with Not_found ->
+					var_inits,e
+				end
+			| TIf(e1,e2,eo) ->
+				let var_inits,e1 = loop var_inits e1 in
+				let _,e2 = loop var_inits e2 in
+				let eo = match eo with None -> None | Some e -> Some (snd (loop var_inits e)) in
+				var_inits,{e with eexpr = TIf(e1,e2,eo)}
+			| TSwitch(e1,cases,edef) ->
+				let var_inits,e1 = loop var_inits e1 in
+				let cases = List.map (fun (el,e) ->
+					let _,e = loop var_inits e in
+					el,e
+				) cases in
+				let edef = match edef with None -> None | Some e -> Some (snd (loop var_inits e)) in
+				var_inits,{e with eexpr = TSwitch(e1,cases,edef)}
+			| _ ->
+				Texpr.foldmap loop var_inits e
+		in
+		snd (loop PMap.empty e)
+end
+
 (* PASS 2 end *)
 
 (* PASS 3 begin *)
@@ -940,26 +977,25 @@ let add_meta_field ctx t = match t with
 		| None -> ()
 		| Some e ->
 			add_feature ctx.com "has_metadata";
-			let f = mk_field "__meta__" t_dynamic c.cl_pos null_pos in
-			f.cf_expr <- Some e;
+			let cf = mk_field "__meta__" e.etype e.epos null_pos in
+			cf.cf_expr <- Some e;
 			let can_deal_with_interface_metadata () = match ctx.com.platform with
 				| Flash when Common.defined ctx.com Define.As3 -> false
 				| Php when not (Common.is_php7 ctx.com) -> false
+				| Cs | Java -> false
 				| _ -> true
 			in
 			if c.cl_interface && not (can_deal_with_interface_metadata()) then begin
 				(* borrowed from gencommon, but I did wash my hands afterwards *)
 				let path = fst c.cl_path,snd c.cl_path ^ "_HxMeta" in
 				let ncls = mk_class c.cl_module path c.cl_pos null_pos in
-				let cf = mk_field "__meta__" e.etype e.epos null_pos in
-				cf.cf_expr <- Some e;
-				ncls.cl_statics <- PMap.add "__meta__" cf ncls.cl_statics;
 				ncls.cl_ordered_statics <- cf :: ncls.cl_ordered_statics;
-				ctx.com.types <- (TClassDecl ncls) :: ctx.com.types;
+				ncls.cl_statics <- PMap.add cf.cf_name cf ncls.cl_statics;
+				ctx.com.types <- ctx.com.types @ [ TClassDecl ncls ];
 				c.cl_meta <- (Meta.Custom ":hasMetadata",[],e.epos) :: c.cl_meta
 			end else begin
-				c.cl_ordered_statics <- f :: c.cl_ordered_statics;
-				c.cl_statics <- PMap.add f.cf_name f c.cl_statics
+				c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
+				c.cl_statics <- PMap.add cf.cf_name cf c.cl_statics
 			end)
 	| _ ->
 		()
@@ -1120,10 +1156,15 @@ let iter_expressions fl mt =
 	| _ ->
 		()
 
+let filter_timer detailed s =
+	timer (if detailed then "filters" :: s else ["filters"])
+
 let run com tctx main =
+	let detail_times = Common.raw_defined com "filter-times" in
 	let new_types = List.filter (fun t -> not (is_cached t)) com.types in
 	(* PASS 1: general expression filters *)
 	let filters = [
+		VarLazifier.apply com;
 		AbstractCast.handle_abstract_casts tctx;
 		check_local_vars_init;
 		Optimizer.basro_flatten_filter tctx;
@@ -1132,23 +1173,43 @@ let run com tctx main =
 		Optimizer.reduce_expression tctx;
 		captured_vars com;
 	] in
-	let filters = match com.platform with
-	| Cs ->
-		filters @ [
-			TryCatchWrapper.configure_cs com
-		]
-	| Java ->
-		filters @ [
-			TryCatchWrapper.configure_java com
-		]
-	| _ -> filters
+	let filters =
+		match com.platform with
+		| Cs ->
+			SetHXGen.run_filter com new_types;
+			filters @ [
+				TryCatchWrapper.configure_cs com
+			]
+		| Java ->
+			SetHXGen.run_filter com new_types;
+			filters @ [
+				TryCatchWrapper.configure_java com
+			]
+		| _ -> filters
 	in
+	let t = filter_timer detail_times ["expr 1"] in
 	List.iter (run_expression_filters tctx filters) new_types;
+	t();
 	(* PASS 1.5: pre-analyzer type filters *)
-	List.iter (fun t ->
-		if com.platform = Cs then check_cs_events tctx.com t;
-	) new_types;
+	let filters =
+		match com.platform with
+		| Cs ->
+			[
+				check_cs_events tctx.com;
+				DefaultArguments.run com;
+			]
+		| Java ->
+			[
+				DefaultArguments.run com;
+			]
+		| _ ->
+			[]
+	in
+	let t = filter_timer detail_times ["type 1"] in
+	List.iter (fun f -> List.iter f new_types) filters;
+	t();
 	if com.platform <> Cross then Analyzer.Run.run_on_types tctx new_types;
+
 	let filters = [
 		Optimizer.sanitize com;
 		if com.config.pf_add_final_return then add_final_return else (fun e -> e);
@@ -1156,10 +1217,17 @@ let run com tctx main =
 		rename_local_vars tctx;
 		mark_switch_break_loops;
 	] in
+	let t = filter_timer detail_times ["expr 2"] in
 	List.iter (run_expression_filters tctx filters) new_types;
+	t();
 	next_compilation();
+	let t = filter_timer detail_times ["callbacks"] in
 	List.iter (fun f -> f()) (List.rev com.callbacks.before_dce); (* macros onGenerate etc. *)
+	t();
+	let t = filter_timer detail_times ["save state"] in
 	List.iter (save_class_state tctx) new_types;
+	t();
+	let t = filter_timer detail_times ["type 2"] in
 	(* PASS 2: type filters pre-DCE *)
 	List.iter (fun t ->
 		remove_generic_base tctx t;
@@ -1168,6 +1236,8 @@ let run com tctx main =
 		(* check @:remove metadata before DCE so it is ignored there (issue #2923) *)
 		check_remove_metadata tctx t;
 	) com.types;
+	t();
+	let t = filter_timer detail_times ["dce"] in
 	(* DCE *)
 	let dce_mode = if Common.defined com Define.As3 then
 		"no"
@@ -1180,6 +1250,7 @@ let run com tctx main =
 		| "no" -> Dce.fix_accessors com
 		| _ -> failwith ("Unknown DCE mode " ^ dce_mode)
 	end;
+	t();
 	(* PASS 3: type filters post-DCE *)
 	let type_filters = [
 		check_private_path;
@@ -1192,4 +1263,10 @@ let run com tctx main =
 		commit_features;
 		(if com.config.pf_reserved_type_paths <> [] then check_reserved_type_paths else (fun _ _ -> ()));
 	] in
-	List.iter (fun t -> List.iter (fun f -> f tctx t) type_filters) com.types
+	let type_filters = match com.platform with
+		| Cs -> type_filters @ [ fun _ t -> InterfaceProps.run t ]
+		| _ -> type_filters
+	in
+	let t = filter_timer detail_times ["type 3"] in
+	List.iter (fun t -> List.iter (fun f -> f tctx t) type_filters) com.types;
+	t()

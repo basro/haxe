@@ -19,8 +19,6 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
- package cpp.zip;
+package hl;
 
-#if (haxe_ver < 9000.0)
-typedef Uncompress = haxe.zip.Uncompress;
-#end
+@:coreType @:notNull @:runtimeValue abstract I64 to Int from Int {}
