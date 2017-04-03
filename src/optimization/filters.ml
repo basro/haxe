@@ -1128,6 +1128,7 @@ let run com tctx main =
 		check_local_vars_init;
 		Optimizer.basro_flatten_filter tctx;
 		Optimizer.inline_constructors tctx;
+		Optimizer.basro_flatten_filter tctx;
 		Optimizer.reduce_expression tctx;
 		captured_vars com;
 	] in
