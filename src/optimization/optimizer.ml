@@ -1478,7 +1478,7 @@ let inline_constructors ctx e =
 			begin match iv with
 			| {iv_kind = IVKRoot r} when not r.r_analyzed ->
 				r.r_analyzed <- true;
-				ignore(analyze_aliases true r.r_args);
+				ignore(analyze_aliases false r.r_args);
 				ignore(analyze_aliases false r.r_inline)
 			| _ -> ()
 			end;
@@ -1491,7 +1491,11 @@ let inline_constructors ctx e =
 				| [] -> None
 			in loop el
 		| TMeta((Meta.InlineConstructorArgument vid,_,_),_) ->
-			(try Some(get_iv vid) with Not_found -> None)
+			(try 
+				let iv = get_iv vid in
+				if iv.iv_closed || not captured then cancel_iv iv e.epos;
+				Some(get_iv vid)
+			with Not_found -> None)
 		| TParenthesis e | TMeta(_,e) | TCast(e,None) ->
 			analyze_aliases captured e
 		| _ ->
