@@ -1478,7 +1478,7 @@ let inline_constructors ctx e =
 			begin match iv with
 			| {iv_kind = IVKRoot r} when not r.r_analyzed ->
 				r.r_analyzed <- true;
-				ignore(analyze_aliases false r.r_args);
+				ignore(analyze_aliases true r.r_args);
 				ignore(analyze_aliases false r.r_inline)
 			| _ -> ()
 			end;
