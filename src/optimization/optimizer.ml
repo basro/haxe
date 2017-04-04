@@ -1421,7 +1421,7 @@ let inline_constructors ctx e =
 	let e = map_inline_objects [] e in
 	if IntMap.is_empty !vars then e else
 	let rec analyze_aliases (captured:bool) (is_lvalue:bool) (e:texpr) : inline_var option =
-		let analyze_aliases_in_lvalue e = analyze_aliases true true e in
+		let analyze_aliases_in_lvalue e = analyze_aliases captured true e in
 		let analyze_aliases captured e = analyze_aliases captured false e in
 		let handle_field_case te fname validate_io =
 			begin match analyze_aliases true te with
