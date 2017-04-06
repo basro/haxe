@@ -1194,22 +1194,14 @@ and inline_object = {
 	io_pos : pos;
 	mutable io_cancelled : bool;
 	mutable io_declared : bool;
-	mutable io_inlined : bool;
 	mutable io_aliases : inline_var list;
 	mutable io_fields : (string,inline_var) PMap.t;
-}
-
-and inline_root_data = {
-	r_inline : texpr;
-	r_cancel : texpr;
-	r_args : texpr;
-	mutable r_analyzed : bool
+	mutable io_expr : texpr;
 }
 
 and inline_var_kind =
 	| IVKField of inline_object * string * texpr option
 	| IVKLocal
-	| IVKRoot of inline_root_data
 
 and inline_var_state =
 	| IVSUnassigned
@@ -1243,8 +1235,10 @@ let inline_constructors ctx e =
 	in
 	let debugon = ref false in
 	let debugmsg (s:string) (p:pos) : unit = if !debugon then ctx.com.warning s p in
+	let inline_objs = ref IntMap.empty in
 	let vars = ref IntMap.empty in
 	let scoped_ivs = ref [] in
+	let get_io (ioid:int) : inline_object = IntMap.find ioid !inline_objs in
 	let get_iv (vid:int) : inline_var = IntMap.find (abs vid) !vars in
 	let rec cancel_io (io:inline_object) (p:pos) : unit =
 		if not io.io_cancelled then begin
@@ -1273,7 +1267,6 @@ let inline_constructors ctx e =
 			let remove = match iv.iv_kind with
 				| IVKField(io,_,_) -> io.io_cancelled
 				| IVKLocal -> true
-				| IVKRoot _ -> false
 			in
 			if remove then begin
 				let v = iv.iv_var in
@@ -1333,10 +1326,27 @@ let inline_constructors ctx e =
 		| _ -> mk (TBlock (el)) t p
 	in
 	let make_expr_for_rev_list (el:texpr list) (t:t) (p:pos) : texpr = make_expr_for_list (List.rev el) t p in
-	let rec map_inline_objects (seen_ctors:tclass_field list) e = 
+	let current_io_id = ref 0 in
+	let increment_io_id e = match e.eexpr with
+		| TObjectDecl _ | TArrayDecl _ | TNew _ -> incr current_io_id
+		| _ -> ()
+	in
+	let mk_emptyblock p = mk (TBlock []) ctx.t.tvoid p in
+	let mk_io (iok : inline_object_kind) : inline_object =
+		let io = {
+			io_kind = iok;
+			io_cancelled = false;
+			io_declared = false;
+			io_fields = PMap.empty;
+			io_aliases = [];
+			io_pos = e.epos; (* TODO: FIX *)
+			io_expr = mk_emptyblock e.epos; (* TODO: FIX *)
+		} in
+		inline_objs := IntMap.add !current_io_id io !inline_objs;
+		io
+	in
+	(*let rec map_inline_objects (seen_ctors:tclass_field list) e = 
 		let e = Type.map_expr (map_inline_objects seen_ctors) e in
-		let mk_io (iok : inline_object_kind) : inline_object = {io_kind = iok; io_cancelled = false; io_declared = false; io_inlined = false; io_fields = PMap.empty; io_aliases = []; io_pos = e.epos} in
-		let mk_emptyblock p = mk (TBlock []) ctx.t.tvoid p in
 		match e.eexpr with
 		| TConst(TString("debugon")) -> debugon := true; e
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl)
@@ -1419,8 +1429,9 @@ let inline_constructors ctx e =
 			e
 	in
 	let e = map_inline_objects [] e in
-	if IntMap.is_empty !vars then e else
+	if IntMap.is_empty !vars then e else *)
 	let rec analyze_aliases (captured:bool) (is_lvalue:bool) (e:texpr) : inline_var option =
+		increment_io_id e;
 		let analyze_aliases_in_lvalue e = analyze_aliases captured true e in
 		let analyze_aliases captured e = analyze_aliases captured false e in
 		let handle_field_case te fname validate_io =
@@ -1444,9 +1455,41 @@ let inline_constructors ctx e =
 			| _ -> None
 			end
 		in
-		match e.eexpr with
-		| TVar(v,None) -> ignore(add v IVKLocal); None
-		| TVar(v,Some rve) ->
+		match e.eexpr, e.etype with
+		| TConst(TString("debugon")),_ -> (debugon := true); None
+		| TObjectDecl fl, _ when captured && fl <> [] && List.for_all (fun(s,_) -> is_valid_ident s) fl ->
+			let io = mk_io (IOKStructure) in
+			let v = alloc_var "inlobj" e.etype e.epos in
+			let ev = mk (TLocal v) v.v_type e.epos in
+			let el = List.map (fun (s,e) ->
+				ignore(alloc_io_field io s e.etype v.v_pos);
+				let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
+				let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
+				e
+			) fl in
+			io.io_expr <- make_expr_for_list el ctx.t.tvoid e.epos;
+			let iv = add v IVKLocal in
+			set_iv_alias iv io;
+			List.iter (fun e -> ignore(analyze_aliases true e)) el;
+			Some iv
+		| TArrayDecl el, TInst(_, [elemtype]) when captured ->
+			let len = List.length el in
+			let io = mk_io (IOKArray(len)) in
+			let v = alloc_var "inlarr" e.etype e.epos in
+			let ev = mk (TLocal v) v.v_type e.epos in
+			ignore(alloc_const_io_field io "length" (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos));
+			let el = List.mapi (fun i e ->
+				let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) elemtype e.epos in
+				ignore(alloc_io_field io (int_field_name i) elemtype v.v_pos);
+				mk (TBinop(OpAssign,ef,e)) elemtype e.epos
+			) el in
+			io.io_expr <- make_expr_for_list el ctx.t.tvoid e.epos;
+			let iv = add v IVKLocal in
+			set_iv_alias iv io;
+			List.iter (fun e -> ignore(analyze_aliases true e)) el;
+			Some iv
+		| TVar(v,None),_ -> ignore(add v IVKLocal); None
+		| TVar(v,Some rve),_ ->
 			begin match analyze_aliases true rve with
 			| Some({iv_state = IVSAliasing(io)}) ->
 				let iv = add v IVKLocal in
@@ -1454,7 +1497,7 @@ let inline_constructors ctx e =
 			| _ -> ()
 			end;
 			None
-		| TBinop(OpAssign, lve, rve) ->
+		| TBinop(OpAssign, lve, rve),_ ->
 			begin match analyze_aliases_in_lvalue lve with
 			| Some({iv_state = IVSUnassigned} as iv) ->
 				begin match analyze_aliases true rve with
@@ -1467,38 +1510,38 @@ let inline_constructors ctx e =
 			| Some(iv) -> cancel_iv iv e.epos; ignore(analyze_aliases false rve); None
 			| _ -> ignore(analyze_aliases false rve); None
 			end
-		| TField(te, fa) ->
+		| TField(te, fa),_ ->
 			handle_field_case te (field_name fa) (fun _ -> true)
-		| TArray(te,{eexpr = TConst (TInt i)}) ->
+		| TArray(te,{eexpr = TConst (TInt i)}),_ ->
 			let i = Int32.to_int i in
 			let validate_io io = match io.io_kind with IOKArray(l) when i >= 0 && i < l -> true | _ -> false in
 			handle_field_case te (int_field_name i) validate_io
-		| TLocal(v) when v.v_id < 0 ->
+		| TLocal(v),_ when v.v_id < 0 ->
 			let iv = get_iv v.v_id in
-			begin match iv with
+			(*begin match iv with
 			| {iv_kind = IVKRoot r} when not r.r_analyzed ->
 				r.r_analyzed <- true;
 				ignore(analyze_aliases false r.r_args);
 				ignore(analyze_aliases false r.r_inline)
 			| _ -> ()
-			end;
+			end;*)
 			if iv.iv_closed || not captured then cancel_iv iv e.epos;
 			Some iv
-		| TBlock(el) ->
+		| TBlock(el),_ ->
 			let rec loop = function
 				| [e] -> analyze_aliases captured e
 				| e::el -> ignore(analyze_aliases true e); loop (el)
 				| [] -> None
 			in loop el
-		| TMeta((Meta.InlineConstructorArgument vid,_,_),_) ->
+		| TMeta((Meta.InlineConstructorArgument vid,_,_),_),_ ->
 			(try 
 				let iv = get_iv vid in
 				if iv.iv_closed || not captured then cancel_iv iv e.epos;
 				Some(get_iv vid)
 			with Not_found -> None)
-		| TParenthesis e | TMeta(_,e) | TCast(e,None) ->
+		| TParenthesis e,_ | TMeta(_,e),_ | TCast(e,None),_ ->
 			analyze_aliases captured e
-		| _ ->
+		| _,_ ->
 			let old = !scoped_ivs in
 			scoped_ivs := [];
 			let f e = ignore(analyze_aliases false e) in
@@ -1508,19 +1551,38 @@ let inline_constructors ctx e =
 			None
 	in
 	ignore(analyze_aliases false false e);
+	current_io_id := 0;
 	let rec get_iv_var_decls (iv:inline_var) : texpr list =
 		match iv with
-		| {iv_state = IVSAliasing io} when not io.io_declared ->
-			io.io_declared <- true;
-			PMap.foldi (fun _ iv acc -> acc@(get_iv_var_decls iv)) io.io_fields []
+		| {iv_state = IVSAliasing io} -> get_io_var_decls io
 		| {iv_kind = IVKField(_,_,Some _)} -> []
 		| {iv_state = IVSCancelled} ->
 			let v = iv.iv_var in
 			[(mk (TVar(v,None)) ctx.t.tvoid v.v_pos)]
 		| _ -> []
+	and get_io_var_decls (io:inline_object) : texpr list = 
+		if io.io_declared then [] else begin
+			io.io_declared <- true;
+			PMap.foldi (fun _ iv acc -> acc@(get_iv_var_decls iv)) io.io_fields []
+		end
 	in
 	let rec final_map ?(unwrap_block = false) (e:texpr) : ((texpr list) * (inline_object option)) = 
-		match e.eexpr with 
+		increment_io_id e;
+		match e.eexpr with
+		| TObjectDecl _ | TArrayDecl _ ->
+			begin try
+				let io = get_io !current_io_id in
+				if io.io_cancelled then raise Not_found;
+				let el,_ = final_map ~unwrap_block:true io.io_expr in
+				let el = el @ get_io_var_decls io in
+				(el,Some io)
+			with Not_found ->
+				let f e =
+					let (el,_) = final_map e in
+					make_expr_for_rev_list el e.etype e.epos
+				in
+				([Type.map_expr f e], None)
+			end
 		| TVar(v, None) when v.v_id < 0 ->
 			(get_iv_var_decls (get_iv v.v_id)), None
 		| TVar(v,Some e) when v.v_id < 0 ->
@@ -1579,14 +1641,14 @@ let inline_constructors ctx e =
 			end
 		| TLocal v when v.v_id < 0 ->
 			begin match get_iv v.v_id with
-			| {iv_state = IVSCancelled; iv_kind = IVKRoot r} ->
+			(* | {iv_state = IVSCancelled; iv_kind = IVKRoot r} ->
 				let el,_ = final_map r.r_cancel in
 				(el, None)
 			| {iv_state = IVSAliasing io; iv_kind = IVKRoot r} as iv when not io.io_inlined ->
 				io.io_inlined <- true;
 				let el,_ = final_map ~unwrap_block:true r.r_inline in
 				let el = el @ get_iv_var_decls iv in
-				(el,Some io)
+				(el,Some io) *)
 			| {iv_state = IVSAliasing io} ->
 				[], (Some io)
 			| iv ->
