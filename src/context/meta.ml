@@ -76,7 +76,7 @@ type strict_meta =
 	| Include
 	| InitPackage
 	| InlineConstructorVariable
-	| InlineConstructorArgument of int
+	| InlineConstructorArgument of int * int
 	| Internal
 	| IsVar
 	| JavaCanonical
