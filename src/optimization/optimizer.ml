@@ -1197,6 +1197,7 @@ and inline_object = {
 	mutable io_aliases : inline_var list;
 	mutable io_fields : (string,inline_var) PMap.t;
 	mutable io_expr : texpr;
+	mutable io_id_start : int;
 	mutable io_id_end : int;
 }
 
@@ -1236,6 +1237,7 @@ let inline_constructors ctx e =
 	in
 	let debugon = ref false in
 	let debugmsg (s:string) (p:pos) : unit = if !debugon then ctx.com.warning s p in
+	let debugprint (s:string) : unit = if !debugon then prerr_endline s in
 	let inline_objs = ref IntMap.empty in
 	let vars = ref IntMap.empty in
 	let scoped_ivs = ref [] in
@@ -1333,7 +1335,7 @@ let inline_constructors ctx e =
 		| _ -> ()
 	in
 	let mk_emptyblock p = mk (TBlock []) ctx.t.tvoid p in
-	let mk_io (iok : inline_object_kind) : inline_object =
+	let mk_io (iok : inline_object_kind) (id:int) : inline_object =
 		let io = {
 			io_kind = iok;
 			io_cancelled = false;
@@ -1342,9 +1344,10 @@ let inline_constructors ctx e =
 			io_aliases = [];
 			io_pos = e.epos; (* TODO: FIX *)
 			io_expr = mk_emptyblock e.epos; (* TODO: FIX *)
-			io_id_end = !current_io_id;
+			io_id_start = id;
+			io_id_end = id;
 		} in
-		inline_objs := IntMap.add !current_io_id io !inline_objs;
+		inline_objs := IntMap.add id io !inline_objs;
 		io
 	in
 	(*let rec map_inline_objects (seen_ctors:tclass_field list) e = 
@@ -1462,6 +1465,7 @@ let inline_constructors ctx e =
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl),_
 			when captured (*&& List.length seen_ctors < 32 && not (List.memq cf seen_ctors) *) ->
 			begin
+				let io_id = !current_io_id in
 				let rec loop (vs, decls, es) el = match el with
 					| e :: el ->
 						begin match e.eexpr with
@@ -1469,20 +1473,20 @@ let inline_constructors ctx e =
 						| _ -> 
 							let v = alloc_var "arg" e.etype e.epos in
 							let decle = mk (TVar(v, Some e)) ctx.t.tvoid e.epos in
-							(* let mde = (Meta.InlineConstructorArgument v.v_id), [], e.epos in
-							let e = mk (TMeta(mde, e)) e.etype e.epos in*)
-							let e = mk (TLocal v) e.etype e.epos in
+							let io_id_start = !current_io_id in
+							ignore(analyze_aliases true decle);
+							let mde = (Meta.InlineConstructorArgument (v.v_id, io_id_start)), [], e.epos in
+							let e = mk (TMeta(mde, e)) e.etype e.epos in
 							loop (v::vs, decle::decls, e::es) el
 						end
 					| [] -> vs, (List.rev decls), (List.rev es)
 				in
 				let argvs, argvdecls, pl = loop ([],[],[]) pl in
-				let r_args =  make_expr_for_list argvdecls ctx.t.tvoid e.epos in
 				let _, cname = c.cl_path in
 				let v = alloc_var ("inl"^cname) e.etype e.epos in
 				match type_inline_ctor ctx c cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl e.epos with
 				| Some inlined_expr ->
-					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) in
+					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) io_id in
 					let ev = mk (TLocal v) v.v_type e.epos in
 					let rec loop (c:tclass) (tl:t list) = 
 						let apply = apply_params c.cl_params tl in
@@ -1499,24 +1503,19 @@ let inline_constructors ctx e =
 					in loop c tl;
 					(* let seen_ctors = cf :: seen_ctors in
 					let inlined_expr = map_inline_objects seen_ctors inlined_expr in *)
-					io.io_expr <- make_expr_for_list (argvdecls@[inlined_expr]) ctx.t.tvoid e.epos;
-					let iv = add v IVKLocal in (* (IVKRoot {r_inline = inlined_expr; r_cancel = e; r_args = r_args;r_analyzed = false}) in *)
+					io.io_expr <- inlined_expr;
+					let iv = add v IVKLocal in
 					set_iv_alias iv io;
+					io.io_id_start <- !current_io_id;
 					ignore(analyze_aliases true io.io_expr);
 					io.io_id_end <- !current_io_id;
 					Some iv
 				| _ ->
-					(* TODO: REFACTOR *)
-					let old = !scoped_ivs in
-					scoped_ivs := [];
-					let f e = ignore(analyze_aliases false e) in
-					Type.iter f e;
-					List.iter (fun iv -> iv.iv_closed <- true) !scoped_ivs;
-					scoped_ivs := old;
+					List.iter (fun v -> cancel_v v v.v_pos) argvs;
 					None
 			end
 		| TObjectDecl fl, _ when captured && fl <> [] && List.for_all (fun(s,_) -> is_valid_ident s) fl ->
-			let io = mk_io (IOKStructure) in
+			let io = mk_io (IOKStructure) !current_io_id in
 			let v = alloc_var "inlobj" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
 			let el = List.map (fun (s,e) ->
@@ -1533,7 +1532,7 @@ let inline_constructors ctx e =
 			Some iv
 		| TArrayDecl el, TInst(_, [elemtype]) when captured ->
 			let len = List.length el in
-			let io = mk_io (IOKArray(len)) in
+			let io = mk_io (IOKArray(len)) !current_io_id in
 			let v = alloc_var "inlarr" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
 			ignore(alloc_const_io_field io "length" (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos));
@@ -1593,7 +1592,7 @@ let inline_constructors ctx e =
 				| e::el -> ignore(analyze_aliases true e); loop (el)
 				| [] -> None
 			in loop el
-		| TMeta((Meta.InlineConstructorArgument vid,_,_),_),_ ->
+		| TMeta((Meta.InlineConstructorArgument (vid,_),_,_),_),_ ->
 			(try 
 				let iv = get_iv vid in
 				if iv.iv_closed || not captured then cancel_iv iv e.epos;
@@ -1644,6 +1643,7 @@ let inline_constructors ctx e =
 					current_io_id := io.io_id_end;
 					result
 				end else begin
+					current_io_id := io.io_id_start;
 					let el,_ = final_map ~unwrap_block:true io.io_expr in
 					let el = el @ get_io_var_decls io in
 					assert (!current_io_id = io.io_id_end);
@@ -1710,14 +1710,6 @@ let inline_constructors ctx e =
 			end
 		| TLocal v when v.v_id < 0 ->
 			begin match get_iv v.v_id with
-			(* | {iv_state = IVSCancelled; iv_kind = IVKRoot r} ->
-				let el,_ = final_map r.r_cancel in
-				(el, None)
-			| {iv_state = IVSAliasing io; iv_kind = IVKRoot r} as iv when not io.io_inlined ->
-				io.io_inlined <- true;
-				let el,_ = final_map ~unwrap_block:true r.r_inline in
-				let el = el @ get_iv_var_decls iv in
-				(el,Some io) *)
 			| {iv_state = IVSAliasing io} ->
 				[], (Some io)
 			| iv ->
@@ -1736,8 +1728,12 @@ let inline_constructors ctx e =
 			let el, io = loop [] el in
 			let el = if unwrap_block then el else [mk (TBlock (List.rev el)) e.etype e.epos] in
 			el, io
-		| TMeta((Meta.InlineConstructorArgument _,_,_),e) ->
-			final_map e
+		| TMeta((Meta.InlineConstructorArgument (_,io_id_start),_,_),e) ->
+			let old_io_id = !current_io_id in
+			current_io_id := io_id_start;
+			let result = final_map e in
+			current_io_id := old_io_id;
+			result
 		| TParenthesis e' | TCast(e',None) | TMeta(_,e') ->
 			let el, io = final_map e' in
 			begin match io with
