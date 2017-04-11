@@ -1562,6 +1562,11 @@ let inline_constructors ctx e =
 					(el,Some io)
 				end
 			with Not_found ->
+				begin match e.eexpr with 
+					| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some _} as cf)} as c,_,_) when is_extern_ctor c cf ->
+						display_error ctx "Extern constructor could not be inlined" e.epos;
+					| _ -> ()
+				end;
 				default_case e
 			end
 		| TVar(v, None) when v.v_id < 0 ->
