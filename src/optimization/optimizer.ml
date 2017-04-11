@@ -1423,8 +1423,11 @@ let inline_constructors ctx e =
 					Some iv
 				| _ ->
 					List.iter (fun v -> cancel_v v v.v_pos) argvs;
+					if is_extern_ctor c cf then display_error ctx "Extern constructor could not be inlined" e.epos;
 					None
 			end
+		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some _} as cf)} as c,_,pl),_ when is_extern_ctor c cf ->
+			error "Extern constructor could not be inlined" e.epos;
 		| TObjectDecl fl, _ when captured && fl <> [] && List.for_all (fun(s,_) -> is_valid_ident s) fl ->
 			let v = alloc_var "inlobj" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
@@ -1562,11 +1565,6 @@ let inline_constructors ctx e =
 						(el,Some io)
 					end
 				with Not_found ->
-					begin match e.eexpr with 
-						| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some _} as cf)} as c,_,_) when is_extern_ctor c cf ->
-							display_error ctx "Extern constructor could not be inlined" e.epos;
-						| _ -> ()
-					end;
 					default_case e
 				end
 			| TVar(v, None) when v.v_id < 0 ->
