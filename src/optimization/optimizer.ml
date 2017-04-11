@@ -1491,13 +1491,6 @@ let inline_constructors ctx e =
 			handle_field_case te (int_field_name i) validate_io
 		| TLocal(v),_ when v.v_id < 0 ->
 			let iv = get_iv v.v_id in
-			(*begin match iv with
-			| {iv_kind = IVKRoot r} when not r.r_analyzed ->
-				r.r_analyzed <- true;
-				ignore(analyze_aliases false r.r_args);
-				ignore(analyze_aliases false r.r_inline)
-			| _ -> ()
-			end;*)
 			if iv.iv_closed || not captured then cancel_iv iv e.epos;
 			Some iv
 		| TBlock(el),_ ->
