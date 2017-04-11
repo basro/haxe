@@ -1521,161 +1521,163 @@ let inline_constructors ctx e =
 			None
 	in
 	ignore(analyze_aliases [] false false e);
-	current_io_id := 0;
-	let rec get_iv_var_decls (iv:inline_var) : texpr list =
-		match iv with
-		| {iv_state = IVSAliasing io} -> get_io_var_decls io
-		| {iv_kind = IVKField(_,_,Some _)} -> []
-		| {iv_state = IVSCancelled} ->
-			let v = iv.iv_var in
-			[(mk (TVar(v,None)) ctx.t.tvoid v.v_pos)]
-		| _ -> []
-	and get_io_var_decls (io:inline_object) : texpr list = 
-		if io.io_declared then [] else begin
-			io.io_declared <- true;
-			PMap.foldi (fun _ iv acc -> acc@(get_iv_var_decls iv)) io.io_fields []
-		end
-	in
-	let rec final_map ?(unwrap_block = false) (e:texpr) : ((texpr list) * (inline_object option)) = 
-		increment_io_id e;
-		let default_case e = 
-			let f e =
-				let (el,_) = final_map e in
-				make_expr_for_rev_list el e.etype e.epos
-			in
-			([Type.map_expr f e], None)
+	if IntMap.for_all (fun _ io -> io.io_cancelled) !inline_objs then e else begin
+		current_io_id := 0;
+		let rec get_iv_var_decls (iv:inline_var) : texpr list =
+			match iv with
+			| {iv_state = IVSAliasing io} -> get_io_var_decls io
+			| {iv_kind = IVKField(_,_,Some _)} -> []
+			| {iv_state = IVSCancelled} ->
+				let v = iv.iv_var in
+				[(mk (TVar(v,None)) ctx.t.tvoid v.v_pos)]
+			| _ -> []
+		and get_io_var_decls (io:inline_object) : texpr list = 
+			if io.io_declared then [] else begin
+				io.io_declared <- true;
+				PMap.foldi (fun _ iv acc -> acc@(get_iv_var_decls iv)) io.io_fields []
+			end
 		in
-		match e.eexpr with
-		| TObjectDecl _ | TArrayDecl _ | TNew _ ->
-			begin try
-				let io = get_io !current_io_id in
-				if io.io_cancelled then begin
-					let result = default_case e in
-					current_io_id := io.io_id_end;
-					result
-				end else begin
-					current_io_id := io.io_id_start;
-					let el,_ = final_map ~unwrap_block:true io.io_expr in
-					let el = el @ get_io_var_decls io in
-					assert (!current_io_id = io.io_id_end);
-					(el,Some io)
-				end
-			with Not_found ->
-				begin match e.eexpr with 
-					| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some _} as cf)} as c,_,_) when is_extern_ctor c cf ->
-						display_error ctx "Extern constructor could not be inlined" e.epos;
-					| _ -> ()
-				end;
-				default_case e
-			end
-		| TVar(v, None) when v.v_id < 0 ->
-			(get_iv_var_decls (get_iv v.v_id)), None
-		| TVar(v,Some e) when v.v_id < 0 ->
-			let el = (get_iv_var_decls (get_iv v.v_id)) in
-			let e,_ = (final_map e) in (e@el, None)
-		| TBinop(OpAssign, lve, rve) ->
-			let (lvel, lvo) = final_map lve in
-			let (rvel, rvo) = final_map rve in
-			begin match lvo with
-			| Some(io) ->
-				(rvel@lvel), lvo
-			| None ->
-				let rve = make_expr_for_rev_list rvel rve.etype rve.epos in
-				begin match lvel with
-				| [] -> assert false
-				| e::el -> 
-					let e = mk (TBinop(OpAssign, e, rve)) e.etype e.epos in
-					(e::el), None
-				end
-			end
-		| TField(te, fa) ->
-			let (tel, thiso) = final_map te in
-			begin match thiso with
-			| Some io ->
-				let fname = field_name fa in
-				begin match get_io_field io fname with
-				| {iv_state = IVSAliasing io} ->
-					tel, Some io
-				| iv ->
-					let newexpr = match iv.iv_kind with
-						| IVKField(_,_,Some constexpr) -> {constexpr with epos = e.epos}
-						| _ -> mk (TLocal iv.iv_var) e.etype e.epos
-					in
-					(newexpr::tel), None
-				end
-			| None ->
-				let te = make_expr_for_rev_list tel te.etype te.epos in
-				[mk (TField(te, fa)) e.etype e.epos], None
-			end
-		| TArray(te, ({eexpr = TConst (TInt i)} as indexexpr)) ->
-			let (tel, thiso) = final_map te in
-			begin match thiso with
-			| Some io ->
-				let i = Int32.to_int i in
-				let fname = int_field_name i in
-				begin match get_io_field io fname with
-				| {iv_state = IVSAliasing io} ->
-					tel, Some io
-				| iv ->
-					let local = (mk (TLocal iv.iv_var) e.etype e.epos) in
-					(local::tel), None
-				end
-			| None ->
-				let te = make_expr_for_rev_list tel te.etype te.epos in
-				[mk (TArray(te, indexexpr)) e.etype e.epos], None
-			end
-		| TLocal v when v.v_id < 0 ->
-			begin match get_iv v.v_id with
-			| {iv_state = IVSAliasing io} ->
-				[], (Some io)
-			| iv ->
-				([mk (TLocal iv.iv_var) e.etype e.epos], None)
-			end
-		| TBlock el ->
-			let rec loop acc el = match el with
-				| [] -> acc, None
-				| [e] ->
-					let el',io = final_map e in
-					(el'@acc), io
-				| e::el ->
-					let el',_ = final_map e in
-					loop (el'@acc) el
+		let rec final_map ?(unwrap_block = false) (e:texpr) : ((texpr list) * (inline_object option)) = 
+			increment_io_id e;
+			let default_case e = 
+				let f e =
+					let (el,_) = final_map e in
+					make_expr_for_rev_list el e.etype e.epos
+				in
+				([Type.map_expr f e], None)
 			in
-			let el, io = loop [] el in
-			let el = if unwrap_block then el else [mk (TBlock (List.rev el)) e.etype e.epos] in
-			el, io
-		| TMeta((Meta.InlineConstructorArgument (_,io_id_start),_,_),e) ->
-			let old_io_id = !current_io_id in
-			current_io_id := io_id_start;
-			let result = final_map e in
-			current_io_id := old_io_id;
-			result
-		| TParenthesis e' | TCast(e',None) | TMeta(_,e') ->
-			let el, io = final_map e' in
-			begin match io with
-			| Some io ->
-				el, Some io
-			| None ->
-				let e' = make_expr_for_rev_list el e'.etype e'.epos in
-				[Type.map_expr (fun _ -> e') e], None
+			match e.eexpr with
+			| TObjectDecl _ | TArrayDecl _ | TNew _ ->
+				begin try
+					let io = get_io !current_io_id in
+					if io.io_cancelled then begin
+						let result = default_case e in
+						current_io_id := io.io_id_end;
+						result
+					end else begin
+						current_io_id := io.io_id_start;
+						let el,_ = final_map ~unwrap_block:true io.io_expr in
+						let el = el @ get_io_var_decls io in
+						assert (!current_io_id = io.io_id_end);
+						(el,Some io)
+					end
+				with Not_found ->
+					begin match e.eexpr with 
+						| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some _} as cf)} as c,_,_) when is_extern_ctor c cf ->
+							display_error ctx "Extern constructor could not be inlined" e.epos;
+						| _ -> ()
+					end;
+					default_case e
+				end
+			| TVar(v, None) when v.v_id < 0 ->
+				(get_iv_var_decls (get_iv v.v_id)), None
+			| TVar(v,Some e) when v.v_id < 0 ->
+				let el = (get_iv_var_decls (get_iv v.v_id)) in
+				let e,_ = (final_map e) in (e@el, None)
+			| TBinop(OpAssign, lve, rve) ->
+				let (lvel, lvo) = final_map lve in
+				let (rvel, rvo) = final_map rve in
+				begin match lvo with
+				| Some(io) ->
+					(rvel@lvel), lvo
+				| None ->
+					let rve = make_expr_for_rev_list rvel rve.etype rve.epos in
+					begin match lvel with
+					| [] -> assert false
+					| e::el -> 
+						let e = mk (TBinop(OpAssign, e, rve)) e.etype e.epos in
+						(e::el), None
+					end
+				end
+			| TField(te, fa) ->
+				let (tel, thiso) = final_map te in
+				begin match thiso with
+				| Some io ->
+					let fname = field_name fa in
+					begin match get_io_field io fname with
+					| {iv_state = IVSAliasing io} ->
+						tel, Some io
+					| iv ->
+						let newexpr = match iv.iv_kind with
+							| IVKField(_,_,Some constexpr) -> {constexpr with epos = e.epos}
+							| _ -> mk (TLocal iv.iv_var) e.etype e.epos
+						in
+						(newexpr::tel), None
+					end
+				| None ->
+					let te = make_expr_for_rev_list tel te.etype te.epos in
+					[mk (TField(te, fa)) e.etype e.epos], None
+				end
+			| TArray(te, ({eexpr = TConst (TInt i)} as indexexpr)) ->
+				let (tel, thiso) = final_map te in
+				begin match thiso with
+				| Some io ->
+					let i = Int32.to_int i in
+					let fname = int_field_name i in
+					begin match get_io_field io fname with
+					| {iv_state = IVSAliasing io} ->
+						tel, Some io
+					| iv ->
+						let local = (mk (TLocal iv.iv_var) e.etype e.epos) in
+						(local::tel), None
+					end
+				| None ->
+					let te = make_expr_for_rev_list tel te.etype te.epos in
+					[mk (TArray(te, indexexpr)) e.etype e.epos], None
+				end
+			| TLocal v when v.v_id < 0 ->
+				begin match get_iv v.v_id with
+				| {iv_state = IVSAliasing io} ->
+					[], (Some io)
+				| iv ->
+					([mk (TLocal iv.iv_var) e.etype e.epos], None)
+				end
+			| TBlock el ->
+				let rec loop acc el = match el with
+					| [] -> acc, None
+					| [e] ->
+						let el',io = final_map e in
+						(el'@acc), io
+					| e::el ->
+						let el',_ = final_map e in
+						loop (el'@acc) el
+				in
+				let el, io = loop [] el in
+				let el = if unwrap_block then el else [mk (TBlock (List.rev el)) e.etype e.epos] in
+				el, io
+			| TMeta((Meta.InlineConstructorArgument (_,io_id_start),_,_),e) ->
+				let old_io_id = !current_io_id in
+				current_io_id := io_id_start;
+				let result = final_map e in
+				current_io_id := old_io_id;
+				result
+			| TParenthesis e' | TCast(e',None) | TMeta(_,e') ->
+				let el, io = final_map e' in
+				begin match io with
+				| Some io ->
+					el, Some io
+				| None ->
+					let e' = make_expr_for_rev_list el e'.etype e'.epos in
+					[Type.map_expr (fun _ -> e') e], None
+				end
+			| _ -> default_case e
+		in
+		let el,_ = final_map e in
+		let e = make_expr_for_rev_list el e.etype e.epos in
+		let rec get_pretty_name iv = match iv.iv_kind with
+			| IVKField(io,fname,None) ->
+				(get_pretty_name (List.hd io.io_aliases)) ^ "_" ^ fname;
+			| _ -> iv.iv_var.v_name
+		in
+		IntMap.iter (fun _ iv ->
+			let v = iv.iv_var in
+			if v.v_id < 0 then begin
+				v.v_id <- -v.v_id;
+				v.v_name <- get_pretty_name iv
 			end
-		| _ -> default_case e
-	in
-	let el,_ = final_map e in
-	let e = make_expr_for_rev_list el e.etype e.epos in
-	let rec get_pretty_name iv = match iv.iv_kind with
-		| IVKField(io,fname,None) ->
-			(get_pretty_name (List.hd io.io_aliases)) ^ "_" ^ fname;
-		| _ -> iv.iv_var.v_name
-	in
-	IntMap.iter (fun _ iv ->
-		let v = iv.iv_var in
-		if v.v_id < 0 then begin
-			v.v_id <- -v.v_id;
-			v.v_name <- get_pretty_name iv
-		end
-	) !vars;
-	e
+		) !vars;
+		e
+	end
 
 (* ---------------------------------------------------------------------- *)
 (* COMPLETION *)
