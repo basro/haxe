@@ -1402,7 +1402,6 @@ let inline_constructors ctx e =
 				match type_inline_ctor ctx c cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl e.epos with
 				| Some inlined_expr ->
 					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) io_id inlined_expr in
-					let ev = mk (TLocal v) v.v_type e.epos in
 					let rec loop (c:tclass) (tl:t list) = 
 						let apply = apply_params c.cl_params tl in
 						List.iter (fun cf -> 
