@@ -1191,12 +1191,12 @@ type inline_object_kind =
 
 and inline_object = {
 	io_kind : inline_object_kind;
+	io_expr : texpr;
 	io_pos : pos;
 	mutable io_cancelled : bool;
 	mutable io_declared : bool;
 	mutable io_aliases : inline_var list;
 	mutable io_fields : (string,inline_var) PMap.t;
-	mutable io_expr : texpr;
 	mutable io_id_start : int;
 	mutable io_id_end : int;
 }
@@ -1334,24 +1334,23 @@ let inline_constructors ctx e =
 		| TObjectDecl _ | TArrayDecl _ | TNew _ -> incr current_io_id
 		| _ -> ()
 	in
-	let mk_emptyblock p = mk (TBlock []) ctx.t.tvoid p in
-	let mk_io (iok : inline_object_kind) (id:int) : inline_object =
-		let io = {
-			io_kind = iok;
-			io_cancelled = false;
-			io_declared = false;
-			io_fields = PMap.empty;
-			io_aliases = [];
-			io_pos = e.epos; (* TODO: FIX *)
-			io_expr = mk_emptyblock e.epos; (* TODO: FIX *)
-			io_id_start = id;
-			io_id_end = id;
-		} in
-		inline_objs := IntMap.add id io !inline_objs;
-		io
-	in
 	let rec analyze_aliases (captured:bool) (is_lvalue:bool) (e:texpr) : inline_var option =
 		increment_io_id e;
+		let mk_io (iok : inline_object_kind) (id:int) (expr:texpr) : inline_object =
+			let io = {
+				io_kind = iok;
+				io_expr = expr;
+				io_pos = e.epos;
+				io_cancelled = false;
+				io_declared = false;
+				io_fields = PMap.empty;
+				io_aliases = [];
+				io_id_start = id;
+				io_id_end = id;
+			} in
+			inline_objs := IntMap.add id io !inline_objs;
+			io
+		in
 		let analyze_aliases_in_lvalue e = analyze_aliases captured true e in
 		let analyze_aliases captured e = analyze_aliases captured false e in
 		let handle_field_case te fname validate_io =
@@ -1401,7 +1400,7 @@ let inline_constructors ctx e =
 				let v = alloc_var ("inl"^cname) e.etype e.epos in
 				match type_inline_ctor ctx c cf tf (mk (TLocal v) (TInst (c,tl)) e.epos) pl e.epos with
 				| Some inlined_expr ->
-					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) io_id in
+					let io = mk_io (IOKCtor(cf,is_extern_ctor c cf,argvs)) io_id inlined_expr in
 					let ev = mk (TLocal v) v.v_type e.epos in
 					let rec loop (c:tclass) (tl:t list) = 
 						let apply = apply_params c.cl_params tl in
@@ -1418,7 +1417,6 @@ let inline_constructors ctx e =
 					in loop c tl;
 					(* let seen_ctors = cf :: seen_ctors in
 					let inlined_expr = map_inline_objects seen_ctors inlined_expr in *)
-					io.io_expr <- inlined_expr;
 					let iv = add v IVKLocal in
 					set_iv_alias iv io;
 					io.io_id_start <- !current_io_id;
@@ -1430,16 +1428,16 @@ let inline_constructors ctx e =
 					None
 			end
 		| TObjectDecl fl, _ when captured && fl <> [] && List.for_all (fun(s,_) -> is_valid_ident s) fl ->
-			let io = mk_io (IOKStructure) !current_io_id in
 			let v = alloc_var "inlobj" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
 			let el = List.map (fun (s,e) ->
-				ignore(alloc_io_field io s e.etype v.v_pos);
 				let ef = mk (TField(ev,FDynamic s)) e.etype e.epos in
 				let e = mk (TBinop(OpAssign,ef,e)) e.etype e.epos in
 				e
 			) fl in
-			io.io_expr <- make_expr_for_list el ctx.t.tvoid e.epos;
+			let io_expr = make_expr_for_list el ctx.t.tvoid e.epos in
+			let io = mk_io (IOKStructure) !current_io_id io_expr in
+			List.iter (fun (s,e) -> ignore(alloc_io_field io s e.etype v.v_pos)) fl;
 			let iv = add v IVKLocal in
 			set_iv_alias iv io;
 			List.iter (fun e -> ignore(analyze_aliases true e)) el;
@@ -1447,16 +1445,16 @@ let inline_constructors ctx e =
 			Some iv
 		| TArrayDecl el, TInst(_, [elemtype]) when captured ->
 			let len = List.length el in
-			let io = mk_io (IOKArray(len)) !current_io_id in
 			let v = alloc_var "inlarr" e.etype e.epos in
 			let ev = mk (TLocal v) v.v_type e.epos in
-			ignore(alloc_const_io_field io "length" (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos));
 			let el = List.mapi (fun i e ->
 				let ef = mk (TArray(ev,(mk (TConst(TInt (Int32.of_int i))) e.etype e.epos))) elemtype e.epos in
-				ignore(alloc_io_field io (int_field_name i) elemtype v.v_pos);
 				mk (TBinop(OpAssign,ef,e)) elemtype e.epos
 			) el in
-			io.io_expr <- make_expr_for_list el ctx.t.tvoid e.epos;
+			let io_expr = make_expr_for_list el ctx.t.tvoid e.epos in
+			let io = mk_io (IOKArray(len)) !current_io_id io_expr in
+			ignore(alloc_const_io_field io "length" (mk (TConst(TInt (Int32.of_int len))) ctx.t.tint e.epos));
+			for i = 0 to len-1 do ignore(alloc_io_field io (int_field_name i) elemtype v.v_pos) done;
 			let iv = add v IVKLocal in
 			set_iv_alias iv io;
 			List.iter (fun e -> ignore(analyze_aliases true e)) el;
