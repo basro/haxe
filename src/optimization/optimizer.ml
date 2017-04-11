@@ -1334,7 +1334,7 @@ let inline_constructors ctx e =
 		| TObjectDecl _ | TArrayDecl _ | TNew _ -> incr current_io_id
 		| _ -> ()
 	in
-	let rec analyze_aliases (captured:bool) (is_lvalue:bool) (e:texpr) : inline_var option =
+	let rec analyze_aliases (seen_ctors:tclass_field list) (captured:bool) (is_lvalue:bool) (e:texpr) : inline_var option =
 		increment_io_id e;
 		let mk_io (iok : inline_object_kind) (id:int) (expr:texpr) : inline_object =
 			let io = {
@@ -1351,8 +1351,9 @@ let inline_constructors ctx e =
 			inline_objs := IntMap.add id io !inline_objs;
 			io
 		in
-		let analyze_aliases_in_lvalue e = analyze_aliases captured true e in
-		let analyze_aliases captured e = analyze_aliases captured false e in
+		let analyze_aliases_in_lvalue e = analyze_aliases seen_ctors captured true e in
+		let analyze_aliases_in_ctor cf captured e = analyze_aliases (cf::seen_ctors) captured false e in
+		let analyze_aliases captured e = analyze_aliases seen_ctors captured false e in
 		let handle_field_case te fname validate_io =
 			begin match analyze_aliases true te with
 			| Some({iv_state = IVSAliasing io} as iv) when validate_io io ->
@@ -1377,7 +1378,7 @@ let inline_constructors ctx e =
 		match e.eexpr, e.etype with
 		| TConst(TString("debugon")),_ -> (debugon := true); None
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl),_
-			when captured (*&& List.length seen_ctors < 32 && not (List.memq cf seen_ctors) *) ->
+			when captured && not (List.memq cf seen_ctors) ->
 			begin
 				let io_id = !current_io_id in
 				let rec loop (vs, decls, es) el = match el with
@@ -1415,12 +1416,10 @@ let inline_constructors ctx e =
 						| Some (c,tl) -> loop c (List.map apply tl)
 						| None -> ()
 					in loop c tl;
-					(* let seen_ctors = cf :: seen_ctors in
-					let inlined_expr = map_inline_objects seen_ctors inlined_expr in *)
 					let iv = add v IVKLocal in
 					set_iv_alias iv io;
 					io.io_id_start <- !current_io_id;
-					ignore(analyze_aliases true io.io_expr);
+					ignore(analyze_aliases_in_ctor cf true io.io_expr);
 					io.io_id_end <- !current_io_id;
 					Some iv
 				| _ ->
@@ -1522,7 +1521,7 @@ let inline_constructors ctx e =
 			scoped_ivs := old;
 			None
 	in
-	ignore(analyze_aliases false false e);
+	ignore(analyze_aliases [] false false e);
 	current_io_id := 0;
 	let rec get_iv_var_decls (iv:inline_var) : texpr list =
 		match iv with
