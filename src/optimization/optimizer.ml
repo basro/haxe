@@ -1175,13 +1175,26 @@ let basro_flatten_filter ctx e =
 (* INLINE CONSTRUCTORS *)
 
 (*
-	First pass :
-	We will look at local variables in the form   var v = new ....
-	we only capture the ones which have constructors marked as inlined
-	then we make sure that these locals are no more referenced except for fields accesses
+	First pass:
+	Finds all inline objects and variables that alias them.
+	Inline objects reference instances of TNew TObjectDecl and TArrayDecl, identified a number
+	assigned by order of appearance in the expression.
+	When an inline object is assigned to a variable, this variable is considered an alias of it.
+	If an aliasing variable is assigned more than once then inlining will be cancelled for the inline
+	object the variable would have aliased.
+	The algorithm supports unassigned variables to be used as aliases 'var a; a = new Inl();'. For this
+	reason variable declarations without assignment are tracked as IVKUnassigned inline variables.
+	When an unassigned inline variable is assigned an alias it's scope is limited to that in which the
+	assignment happened, after which the variable is set as "closed" and any appearance will cancel inlining.
+	Fields of inline objects behave in the same way as unassigned inline variables, allowing nested object
+	inlining.
 
-	Second pass :
-	We replace the variables by their fields lists, and the corresponding fields accesses as well
+	Second pass:
+	Replace variables that alias inline objects with their respective field inline variables.
+	Replace inline objects with their inlined constructor expressions.
+	Replace field access of aliasing variables with the respective field inline variable.
+	Because some replacements turn a single expression into many, this pass will map texpr into texpr list,
+	which is converted into TBlocks by the caller as needed.
 *)
 
 type inline_object_kind = 
