@@ -1191,7 +1191,7 @@ let basro_flatten_filter ctx e =
 
 	Second pass:
 	Replace variables that alias inline objects with their respective field inline variables.
-	Replace inline objects with their inlined constructor expressions.
+	Identify inline objects by order of appearance and replace them with their inlined constructor expressions.
 	Replace field access of aliasing variables with the respective field inline variable.
 	Because some replacements turn a single expression into many, this pass will map texpr into texpr list,
 	which is converted into TBlocks by the caller as needed.
