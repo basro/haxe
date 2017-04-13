@@ -1238,9 +1238,6 @@ let inline_constructors ctx e =
 		with Exit ->
 			false
 	in
-	let debugon = ref false in
-	let debugmsg (s:string) (p:pos) : unit = if !debugon then ctx.com.warning s p in
-	let debugprint (s:string) : unit = if !debugon then prerr_endline s in
 	let inline_objs = ref IntMap.empty in
 	let vars = ref IntMap.empty in
 	let scoped_ivs = ref [] in
@@ -1248,7 +1245,6 @@ let inline_constructors ctx e =
 	let get_iv (vid:int) : inline_var = IntMap.find (abs vid) !vars in
 	let rec cancel_io (io:inline_object) (p:pos) : unit =
 		if not io.io_cancelled then begin
-			debugmsg "Cancelled io" io.io_pos;
 			io.io_cancelled <- true;
 			List.iter (fun iv -> cancel_iv iv p) io.io_aliases;
 			PMap.iter (fun _ iv -> cancel_iv iv p) io.io_fields;
@@ -1263,7 +1259,6 @@ let inline_constructors ctx e =
 		end
 	and cancel_iv (iv:inline_var) (p:pos) : unit =
 		if (iv.iv_state <> IVSCancelled) then begin
-			debugmsg ("Cancelled iv: "^iv.iv_var.v_name) p;
 			let old = iv.iv_state in
 			iv.iv_state <- IVSCancelled;
 			begin match old with
@@ -1379,7 +1374,6 @@ let inline_constructors ctx e =
 			end
 		in
 		match e.eexpr, e.etype with
-		| TConst(TString("debugon")),_ -> (debugon := true); None
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl),_
 			when captured && not (List.memq cf seen_ctors) ->
 			begin
