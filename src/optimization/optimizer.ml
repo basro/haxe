@@ -1211,7 +1211,7 @@ let compress_var_decls ctx e =
 				| TVar(v,None) when v.v_id < 0 -> []
 				| TBinop(OpAssign, {eexpr = TLocal v}, rve) when v.v_id < 0 ->
 					unmark_var v;
-					[mk (TVar(v, Some rve)) e.etype e.epos]
+					[mk (TVar(v, Some rve)) ctx.t.tvoid e.epos]
 				| TBlock el ->
 					List.flatten (List.map block_map el)
 				| _ -> [second_pass e]
