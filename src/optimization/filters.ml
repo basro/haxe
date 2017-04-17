@@ -858,6 +858,7 @@ let run com tctx main =
 		AbstractCast.handle_abstract_casts tctx;
 		check_local_vars_init;
 		Optimizer.inline_constructors tctx;
+		Optimizer.compress_var_decls tctx;
 		Optimizer.reduce_expression tctx;
 		CapturedVars.captured_vars com;
 	] in

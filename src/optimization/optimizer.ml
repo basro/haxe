@@ -1162,6 +1162,65 @@ let rec make_constant_expression ctx ?(concat_strings=false) e =
 	| _ -> None
 
 (* ---------------------------------------------------------------------- *)
+(* COMPRESS VAR DECLS *)
+
+let s_expr_pretty e = s_expr_pretty false "" false (s_type (print_context())) e
+
+let compress_var_decls ctx e =
+	let debugon = ref false in
+	let debug_msg s = if !debugon then prerr_endline s in
+	let second_pass_vars = ref [] in
+	let mark_var v p = if v.v_id <= 0 then error (string_of_int v.v_id) p; v.v_id <- -v.v_id in
+	let unmark_var v = assert (v.v_id < 0); v.v_id <- -v.v_id in
+	let rec first_pass e = match e.eexpr with
+		| TConst(TString("debugon")) -> debugon := true;
+		| TBlock el -> 
+			let block_vars = ref [] in
+			let rec block_pass e = match e.eexpr with
+				| TVar (v,None) ->
+					block_vars := v::!block_vars; mark_var v e.epos
+				| TBinop(OpAssign, {eexpr = TLocal v}, rve) ->
+					first_pass rve;
+					if v.v_id < 0 then  begin
+						unmark_var v;
+						if List.memq v !block_vars then begin
+							second_pass_vars := v::!second_pass_vars;
+						end
+					end
+				| TBlock el ->
+					List.iter block_pass el
+				| _ -> first_pass e
+			in
+			let rec loop el = match el with
+				| [e] -> first_pass e;
+				| e::el -> block_pass e; loop el
+				| [] -> ()
+			in loop el;
+			List.iter (fun v -> if v.v_id < 0 then unmark_var v) !block_vars
+		| TLocal v when v.v_id < 0 -> unmark_var v
+		| _ -> Type.iter first_pass e
+	in
+	first_pass e;
+	List.iter (fun v -> mark_var v v.v_pos) !second_pass_vars;
+	let rec second_pass e = 
+		match e.eexpr with
+		| TBlock el ->
+			let rec block_map e = match e.eexpr with
+				| TVar(v,None) when v.v_id < 0 -> []
+				| TBinop(OpAssign, {eexpr = TLocal v}, rve) when v.v_id < 0 ->
+					unmark_var v;
+					[mk (TVar(v, Some rve)) e.etype e.epos]
+				| TBlock el ->
+					List.flatten (List.map block_map el)
+				| _ -> [second_pass e]
+			in
+			let el = List.flatten (List.map block_map el) in
+			{e with eexpr = TBlock el}
+		| _ -> Type.map_expr second_pass e
+	in
+	second_pass e
+
+(* ---------------------------------------------------------------------- *)
 (* INLINE CONSTRUCTORS *)
 
 (*
