@@ -1175,6 +1175,7 @@ let compress_var_decls ctx e =
 	let rec first_pass e = match e.eexpr with
 		| TConst(TString("debugon")) -> debugon := true;
 		| TBlock el -> 
+			let tt = e.etype in
 			let block_vars = ref [] in
 			let rec block_pass e = match e.eexpr with
 				| TVar (v,None) ->
@@ -1192,7 +1193,8 @@ let compress_var_decls ctx e =
 				| _ -> first_pass e
 			in
 			let rec loop el = match el with
-				| [e] -> first_pass e;
+				| [e] ->
+					if ExtType.is_void tt then block_pass e else first_pass e
 				| e::el -> block_pass e; loop el
 				| [] -> ()
 			in loop el;
