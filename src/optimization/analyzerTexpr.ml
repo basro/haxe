@@ -626,7 +626,7 @@ module Fusion = struct
 				end
 			| {eexpr = TVar(v1,Some e1)} :: el when config.optimize && config.local_dce && state#get_reads v1 = 0 && state#get_writes v1 = 0 ->
 				fuse acc (e1 :: el)
-			| ({eexpr = TVar(v1,None)} as ev) :: el ->
+			| ({eexpr = TVar(v1,None)} as ev) :: el when not v1.v_capture ->
 				let found = ref false in
 				let replace e = match e.eexpr with
 					| TBinop(OpAssign,{eexpr = TLocal v2},e2) when v1 == v2 ->
