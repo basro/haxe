@@ -480,7 +480,7 @@ class StringTools {
 		#elseif python
 		return c == -1;
 		#else
-		return c == null;
+		return false;
 		#end
 	}
 
