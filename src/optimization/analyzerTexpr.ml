@@ -628,13 +628,13 @@ module Fusion = struct
 				fuse acc (e1 :: el)
 			| ({eexpr = TVar(v1,None)} as ev) :: el ->
 				let found = ref false in
-				let rec replace e = match e.eexpr with
+				let replace e = match e.eexpr with
 					| TBinop(OpAssign,{eexpr = TLocal v2},e2) when v1 == v2 ->
 						found := true;
 						{ev with eexpr = TVar(v1,Some e2)}
 					| TLocal v2 when v1 == v2 -> raise Exit
 					| TIf _ | TBlock _ | TWhile _ | TFor _ | TSwitch _ | TTry _ -> raise Exit
-					| _ -> Type.map_expr replace e
+					| _ -> e
 				in
 				begin try
 					let rec loop acc el = match el with
