@@ -835,7 +835,30 @@ module Fusion = struct
 					fuse acc el
 				with Exit ->
 					if config.fusion_debug then print_endline (Printf.sprintf "NO: %s" (Printexc.get_backtrace()));
-					fuse (ev :: acc) el
+					begin match el with
+					| ({eexpr = TUnop((Increment | Decrement) as op,Prefix,{eexpr = TLocal v1})} as e2) :: el ->
+						let found = ref false in
+						let rec replace e = match e.eexpr with
+							| TLocal v2 when v1 == v2 ->
+								if !found then raise Exit;
+								found := true;
+								{e with eexpr = TUnop(op,Postfix,e)}
+							| TIf _ | TSwitch _ | TTry _ | TWhile _ | TFor _ ->
+								raise Exit
+							| _ ->
+								Type.map_expr replace e
+						in
+						begin try
+							let ev = replace ev in
+							if not !found then raise Exit;
+							state#changed;
+							fuse acc (ev :: el)
+						with Exit ->
+							fuse (ev :: acc) (e2 :: el)
+						end
+					| _ ->
+						fuse (ev :: acc) el
+					end
 				end
 			| {eexpr = TUnop((Increment | Decrement as op,Prefix,({eexpr = TLocal v} as ev)))} as e1 :: e2 :: el ->
 				begin try
