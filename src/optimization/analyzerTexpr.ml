@@ -626,6 +626,33 @@ module Fusion = struct
 				end
 			| {eexpr = TVar(v1,Some e1)} :: el when config.optimize && config.local_dce && state#get_reads v1 = 0 && state#get_writes v1 = 0 ->
 				fuse acc (e1 :: el)
+			| ({eexpr = TVar(v1,None)} as ev) :: el ->
+				let found = ref false in
+				let rec replace e = match e.eexpr with
+					| TBinop(OpAssign,{eexpr = TLocal v2},e2) when v1 == v2 ->
+						found := true;
+						{ev with eexpr = TVar(v1,Some e2)}
+					| TLocal v2 when v1 == v2 -> raise Exit
+					| TIf _ | TBlock _ | TWhile _ | TFor _ | TSwitch _ | TTry _ -> raise Exit
+					| _ -> Type.map_expr replace e
+				in
+				begin try
+					let rec loop acc el = match el with
+						| e :: el ->
+							let e = replace e in
+							if !found then (List.rev (e :: acc)) @ el
+							else loop (e :: acc) el
+						| [] ->
+							List.rev acc
+					in
+					let el = loop [] el in
+					if not !found then raise Exit;
+					state#changed;
+					state#dec_writes v1;
+					fuse acc el
+				with Exit ->
+					fuse (ev :: acc) el
+				end
 			| ({eexpr = TVar(v1,Some e1)} as ev) :: el when can_be_fused v1 e1 ->
 				let found = ref false in
 				let blocked = ref false in
