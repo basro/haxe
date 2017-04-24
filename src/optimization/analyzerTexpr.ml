@@ -628,18 +628,18 @@ module Fusion = struct
 				fuse acc (e1 :: el)
 			| ({eexpr = TVar(v1,None)} as ev) :: el when not v1.v_capture ->
 				let found = ref false in
-				let replace e = match e.eexpr with
+				let rec replace deep e = match e.eexpr with
 					| TBinop(OpAssign,{eexpr = TLocal v2},e2) when v1 == v2 ->
+						if deep then raise Exit;
 						found := true;
 						{ev with eexpr = TVar(v1,Some e2)}
 					| TLocal v2 when v1 == v2 -> raise Exit
-					| TIf _ | TBlock _ | TWhile _ | TFor _ | TSwitch _ | TTry _ -> raise Exit
-					| _ -> e
+					| _ -> Type.map_expr (replace true) e
 				in
 				begin try
 					let rec loop acc el = match el with
 						| e :: el ->
-							let e = replace e in
+							let e = replace false e in
 							if !found then (List.rev (e :: acc)) @ el
 							else loop (e :: acc) el
 						| [] ->
