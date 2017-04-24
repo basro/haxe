@@ -1163,6 +1163,30 @@ let rec make_constant_expression ctx ?(concat_strings=false) e =
 		with Not_found -> None) *)
 	| _ -> None
 
+
+(* ---------------------------------------------------------------------- *)
+(* COMPRESS VAR DECLS *)
+
+let s_expr_pretty e = s_expr_pretty false "" false (s_type (print_context())) e
+
+let flatten_blocks ctx e =
+	let debugon = ref false in
+	let debug_msg s = if !debugon then prerr_endline s in
+	let rec second_pass e = 
+		match e.eexpr with
+		| TBlock el ->
+			let rec block_map e = match e.eexpr with
+				| TBlock el ->
+					List.flatten (List.map block_map el)
+				| _ -> [second_pass e]
+			in
+			let el = List.flatten (List.map block_map el) in
+			{e with eexpr = TBlock el}
+		| _ -> Type.map_expr second_pass e
+	in
+	second_pass e
+
+
 (* ---------------------------------------------------------------------- *)
 (* INLINE CONSTRUCTORS *)
 (* This version is disabled by default, use -D old-constructor-inline to use this *)

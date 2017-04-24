@@ -850,6 +850,15 @@ let iter_expressions fl mt =
 let filter_timer detailed s =
 	timer (if detailed then "filters" :: s else ["filters"])
 
+let debug_hack_filter ctx e =
+	let rec loop e = match e.eexpr with
+	| TBlock({eexpr = (TConst(TString("debugon")))}::el) -> 
+		(* prerr_endline (Type.s_expr Type.Printer.s_type e); e *)
+		let s_expr_pretty e = s_expr_pretty false "" false (s_type (print_context())) e in
+		prerr_endline (s_expr_pretty e); e
+	| _ -> Type.map_expr loop e
+	in loop e
+
 let run com tctx main =
 	let detail_times = Common.raw_defined com "filter-times" in
 	let new_types = List.filter (fun t ->
@@ -867,7 +876,9 @@ let run com tctx main =
 		VarLazifier.apply com;
 		AbstractCast.handle_abstract_casts tctx;
 		check_local_vars_init;
+		debug_hack_filter tctx;
 		if Common.defined com Define.OldConstructorInline then Optimizer.inline_constructors tctx else InlineConstructors.inline_constructors tctx;
+		debug_hack_filter tctx;
 		Optimizer.reduce_expression tctx;
 		CapturedVars.captured_vars com;
 	] in

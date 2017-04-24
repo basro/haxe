@@ -24,6 +24,11 @@ open Typecore
 open Error
 open Globals
 
+let s_expr_pretty e = s_expr_pretty false "" false (s_type (print_context())) e
+
+
+
+
 (* INLINE CONSTRUCTORS *)
 
 (*
@@ -83,6 +88,8 @@ and inline_var = {
 }
 
 let inline_constructors ctx e =
+	let debugon = ref false in
+	let debug_msg s = if !debugon then prerr_endline s in
 	let is_valid_ident s =
 		try
 			if String.length s = 0 then raise Exit;
@@ -235,6 +242,7 @@ let inline_constructors ctx e =
 			end
 		in
 		match e.eexpr, e.etype with
+		| TConst(TString "debugon"),_ -> debugon := true; None
 		| TNew({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,tl,pl),_
 			when captured && not (List.memq cf seen_ctors) ->
 			begin
@@ -421,7 +429,7 @@ let inline_constructors ctx e =
 			(get_iv_var_decls (get_iv v.v_id)), None
 		| TVar(v,Some e) when v.v_id < 0 ->
 			let el = (get_iv_var_decls (get_iv v.v_id)) in
-			let e,_ = (final_map e) in (e@el, None)
+			let e,_ = (final_map ~unwrap_block:true e) in (e@el, None)
 		| TBinop(OpAssign, lve, rve) ->
 			let (lvel, lvo) = final_map lve in
 			let (rvel, rvo) = final_map rve in
