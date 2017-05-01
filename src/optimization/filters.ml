@@ -868,7 +868,7 @@ let run com tctx main =
 		VarLazifier.apply com;
 		AbstractCast.handle_abstract_casts tctx;
 		check_local_vars_init;
-		if Common.defined com Define.OldConstructorInline then Optimizer.inline_constructors tctx else InlineConstructors.inline_constructors tctx;
+		if not (Common.defined com Define.OldConstructorInline) then Optimizer.inline_constructors tctx else InlineConstructors.inline_constructors tctx;
 		Optimizer.reduce_expression tctx;
 		CapturedVars.captured_vars com;
 	] in
