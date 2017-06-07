@@ -1,6 +1,7 @@
 package unit.issues;
 
 class Issue6342 extends unit.Test {
+	@:analyzer(ignore)
 	function test() {
 		var t = new A(1);
 		var tmp1 = t.foo().x;
@@ -13,14 +14,17 @@ class Issue6342 extends unit.Test {
 	}
 }
 
+@:keep
 private class A
 {
 	public var x:Int;
 	
+	@:analyzer(ignore)
 	public inline function new(x) {
 		this.x = x;
 	}
 	
+	@:analyzer(ignore)
 	public inline function foo() {
 		var tmp = x;
 		return new A(x);
