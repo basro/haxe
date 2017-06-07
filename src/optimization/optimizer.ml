@@ -261,6 +261,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 		with Not_found ->
 			let v' = alloc_var v.v_name v.v_type v.v_pos in
 			if Meta.has Meta.Unbound v.v_meta then v'.v_meta <- [Meta.Unbound,[],p];
+			v'.v_extra <- v.v_extra;
 			let i = {
 				i_var = v;
 				i_subst = v';
@@ -343,9 +344,6 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 		if l.i_abstract_this then l.i_subst.v_extra <- Some ([],Some e);
 		l, e
 	) (ethis :: loop params f.tf_args true) ((vthis,None) :: f.tf_args) in
-	List.iter (fun (l,e) ->
-		if might_be_affected e then l.i_force_temp <- true;
-	) inlined_vars;
 	let inlined_vars = List.rev inlined_vars in
 	(*
 		here, we try to eliminate final returns from the expression tree.
@@ -465,10 +463,12 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 			let e1 = map term e1 in
 			mk (TParenthesis e1) e1.etype e.epos
 		| TUnop ((Increment|Decrement) as op,flag,({ eexpr = TLocal v } as e1)) ->
+			had_side_effect := true;
 			let l = read_local v in
 			l.i_write <- true;
 			{e with eexpr = TUnop(op,flag,{e1 with eexpr = TLocal l.i_subst})}
 		| TBinop ((OpAssign | OpAssignOp _) as op,({ eexpr = TLocal v } as e1),e2) ->
+			had_side_effect := true;
 			let l = read_local v in
 			l.i_write <- true;
 			let e2 = map false e2 in
@@ -491,6 +491,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 			old();
 			{ e with eexpr = TFunction { tf_args = args; tf_expr = expr; tf_type = f.tf_type } }
 		| TCall({eexpr = TConst TSuper; etype = t},el) ->
+			had_side_effect := true;
 			begin match follow t with
 			| TInst({ cl_constructor = Some ({cf_kind = Method MethInline; cf_expr = Some ({eexpr = TFunction tf})} as cf)} as c,_) ->
 				begin match type_inline_ctor ctx c cf tf ethis el po with
@@ -504,10 +505,16 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 		| TMeta(m,e1) ->
 			let e1 = map term e1 in
 			{e with eexpr = TMeta(m,e1)}
+		| TNew _ | TCall _ | TBinop ((OpAssignOp _ | OpAssign),_,_) | TUnop ((Increment|Decrement),_,_) ->
+			had_side_effect := true;
+			Type.map_expr (map false) e
 		| _ ->
 			Type.map_expr (map false) e
 	in
 	let e = map true f.tf_expr in
+	if !had_side_effect then List.iter (fun (l,e) ->
+		if might_be_affected e then l.i_force_temp <- true;
+	) inlined_vars;
 	(*
 		if variables are not written and used with a const value, let's substitute
 		with the actual value, either create a temp var
@@ -1105,18 +1112,23 @@ let reduce_control_flow ctx e = match e.eexpr with
 let rec reduce_loop ctx e =
 	let e = Type.map_expr (reduce_loop ctx) e in
 	sanitize_expr ctx.com (match e.eexpr with
-	| TCall ({ eexpr = TField ({ eexpr = TTypeExpr (TClassDecl c) },field) },params) ->
-		(match api_inline ctx c (field_name field) params e.epos with
-		| None -> reduce_expr ctx e
-		| Some e -> reduce_loop ctx e)
-	| TCall ({ eexpr = TFunction func } as ef,el) ->
-		let cf = mk_field "" ef.etype e.epos null_pos in
-		let ethis = mk (TConst TThis) t_dynamic e.epos in
-		let rt = (match follow ef.etype with TFun (_,rt) -> rt | _ -> assert false) in
-		let inl = (try type_inline ctx cf func ethis el rt None e.epos ~self_calling_closure:true false with Error (Custom _,_) -> None) in
-		(match inl with
-		| None -> reduce_expr ctx e
-		| Some e -> reduce_loop ctx e)
+	| TCall(e1,el) ->
+		begin match Texpr.skip e1 with
+			| { eexpr = TFunction func } as ef ->
+				let cf = mk_field "" ef.etype e.epos null_pos in
+				let ethis = mk (TConst TThis) t_dynamic e.epos in
+				let rt = (match follow ef.etype with TFun (_,rt) -> rt | _ -> assert false) in
+				let inl = (try type_inline ctx cf func ethis el rt None e.epos ~self_calling_closure:true false with Error (Custom _,_) -> None) in
+				(match inl with
+				| None -> reduce_expr ctx e
+				| Some e -> reduce_loop ctx e)
+			| { eexpr = TField ({ eexpr = TTypeExpr (TClassDecl c) },field) } ->
+				(match api_inline ctx c (field_name field) el e.epos with
+				| None -> reduce_expr ctx e
+				| Some e -> reduce_loop ctx e)
+			| _ ->
+				reduce_expr ctx e
+		end
 	| _ ->
 		reduce_expr ctx (reduce_control_flow ctx e))
 

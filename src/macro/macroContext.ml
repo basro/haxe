@@ -25,7 +25,15 @@ open Typecore
 open Error
 open Globals
 
-module InterpImpl = Interp (* Hlmacro *)
+module Eval = struct
+	include EvalEncode
+	include EvalDecode
+	include EvalValue
+	include EvalContext
+	include EvalMain
+end
+
+module InterpImpl = Eval (* Hlmacro *)
 
 module Interp = struct
 	module BuiltApi = MacroApi.MacroApiImpl(InterpImpl)
@@ -78,7 +86,7 @@ let macro_timer ctx l =
 
 let typing_timer ctx need_type f =
 	let t = Common.timer ["typing"] in
-	let old = ctx.com.error and oldp = ctx.pass in
+	let old = ctx.com.error and oldp = ctx.pass and oldlocals = ctx.locals in
 	(*
 		disable resumable errors... unless we are in display mode (we want to reach point of completion)
 	*)
@@ -89,6 +97,7 @@ let typing_timer ctx need_type f =
 		t();
 		ctx.com.error <- old;
 		ctx.pass <- oldp;
+		ctx.locals <- oldlocals;
 	in
 	try
 		let r = f() in
@@ -356,6 +365,10 @@ let make_macro_api ctx p =
 		MacroApi.on_reuse = (fun f ->
 			macro_interp_on_reuse := f :: !macro_interp_on_reuse
 		);
+		MacroApi.decode_expr = Interp.decode_expr;
+		MacroApi.encode_expr = Interp.encode_expr;
+		MacroApi.encode_ctype = Interp.encode_ctype;
+		MacroApi.decode_type = Interp.decode_type;
 	}
 
 let rec init_macro_interp ctx mctx mint =
@@ -390,7 +403,7 @@ and flush_macro_context mint ctx =
 	(* if one of the type we are using has been modified, we need to create a new macro context from scratch *)
 	let mint = if not (Interp.can_reuse mint types && check_reuse()) then begin
 		let com2 = mctx.com in
-		let mint = Interp.create com2 (make_macro_api ctx Globals.null_pos) in
+		let mint = Interp.create com2 (make_macro_api ctx Globals.null_pos) true in
 		let macro = ((fun() -> Interp.select mint), mctx) in
 		ctx.g.macros <- Some macro;
 		mctx.g.macros <- Some macro;
@@ -431,7 +444,8 @@ let create_macro_interp ctx mctx =
 	let com2 = mctx.com in
 	let mint, init = (match !macro_interp_cache with
 		| None ->
-			let mint = Interp.create com2 (make_macro_api ctx null_pos) in
+			let mint = Interp.create com2 (make_macro_api ctx null_pos) true in
+			Interp.select mint;
 			mint, (fun() -> init_macro_interp ctx mctx mint)
 		| Some mint ->
 			macro_interp_reused := false;
@@ -503,9 +517,7 @@ let load_macro ctx display cpath f p =
 		let mt = Typeload.load_type_def mctx p { tpackage = fst cpath; tname = snd cpath; tparams = []; tsub = sub } in
 		let cl, meth = (match mt with
 			| TClassDecl c ->
-				let t = macro_timer ctx ["finalize"] in
 				mctx.g.do_finalize mctx;
-				t();
 				c, (try PMap.find f c.cl_statics with Not_found -> error ("Method " ^ f ^ " not found on class " ^ s_type_path cpath) p)
 			| _ -> error "Macro should be called on a class" p
 		) in
@@ -681,7 +693,7 @@ let type_macro ctx mode cpath f (el:Ast.expr list) p =
 					else try
 						let ct = Interp.decode_ctype v in
 						Typeload.load_complex_type ctx false p ct;
-					with MacroApi.Invalid_expr ->
+					with MacroApi.Invalid_expr | EvalContext.RunTimeException _ ->
 						Interp.decode_type v
 					in
 					ctx.ret <- t;
@@ -755,11 +767,11 @@ let call_init_macro ctx e =
 		error "Invalid macro call" p
 
 let interpret ctx =
-	let mctx = Interp.create ctx.com (make_macro_api ctx null_pos) in
+	let mctx = Interp.create ctx.com (make_macro_api ctx null_pos) false in
 	Interp.add_types mctx ctx.com.types (fun t -> ());
 	match ctx.com.main with
-	| None -> ()
-	| Some e -> ignore(Interp.eval_expr mctx e)
+		| None -> ()
+		| Some e -> ignore(Interp.eval_expr mctx e)
 
 let setup() =
 	Interp.setup Interp.macro_api
