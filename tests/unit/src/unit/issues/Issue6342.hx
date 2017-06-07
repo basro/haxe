@@ -15,7 +15,7 @@ class Issue6342 extends unit.Test {
 
 private class A
 {
-	public var x:Float;
+	public var x:Int;
 	
 	public inline function new(x) {
 		this.x = x;
