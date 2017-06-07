@@ -2,7 +2,6 @@ package unit.issues;
 
 class Issue6342 extends unit.Test {
 	function test() {
-	{
 		var t = new A(1);
 		var tmp1 = t.foo().x;
 		eq(1, tmp1);
