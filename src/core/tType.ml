@@ -96,11 +96,13 @@ and tvar = {
 	v_pos : pos;
 }
 
-and tfunc = {
-	tf_args : (tvar * texpr option) list;
+and 'a tpoly_func = {
+	tf_args : (tvar * 'a option) list;
 	tf_type : t;
-	tf_expr : texpr;
+	tf_expr : 'a;
 }
+
+and tfunc = texpr tpoly_func
 
 and anon_status =
 	| Closed
@@ -116,36 +118,38 @@ and tanon = {
 	a_status : anon_status ref;
 }
 
-and texpr_expr =
+and 'a tpoly_expr =
 	| TConst of tconstant
 	| TLocal of tvar
-	| TArray of texpr * texpr
-	| TBinop of Ast.binop * texpr * texpr
-	| TField of texpr * tfield_access
+	| TArray of 'a * 'a
+	| TBinop of Ast.binop * 'a * 'a
+	| TField of 'a * tfield_access
 	| TTypeExpr of module_type
-	| TParenthesis of texpr
-	| TObjectDecl of ((string * pos * quote_status) * texpr) list
-	| TArrayDecl of texpr list
-	| TCall of texpr * texpr list
-	| TNew of tclass * tparams * texpr list
-	| TUnop of Ast.unop * Ast.unop_flag * texpr
-	| TFunction of tfunc
-	| TVar of tvar * texpr option
-	| TBlock of texpr list
-	| TFor of tvar * texpr * texpr
-	| TIf of texpr * texpr * texpr option
-	| TWhile of texpr * texpr * Ast.while_flag
-	| TSwitch of texpr * (texpr list * texpr) list * texpr option
-	| TTry of texpr * (tvar * texpr) list
-	| TReturn of texpr option
+	| TParenthesis of 'a
+	| TObjectDecl of ((string * pos * quote_status) * 'a) list
+	| TArrayDecl of 'a list
+	| TCall of 'a * 'a list
+	| TNew of tclass * tparams * 'a list
+	| TUnop of Ast.unop * Ast.unop_flag * 'a
+	| TFunction of 'a tpoly_func
+	| TVar of tvar * 'a option
+	| TBlock of 'a list
+	| TFor of tvar * 'a * 'a
+	| TIf of 'a * 'a * 'a option
+	| TWhile of 'a * 'a * Ast.while_flag
+	| TSwitch of 'a * ('a list * 'a) list * 'a option
+	| TTry of 'a * (tvar * 'a) list
+	| TReturn of 'a option
 	| TBreak
 	| TContinue
-	| TThrow of texpr
-	| TCast of texpr * module_type option
-	| TMeta of metadata_entry * texpr
-	| TEnumParameter of texpr * tenum_field * int
-	| TEnumIndex of texpr
+	| TThrow of 'a
+	| TCast of 'a * module_type option
+	| TMeta of metadata_entry * 'a
+	| TEnumParameter of 'a * tenum_field * int
+	| TEnumIndex of 'a
 	| TIdent of string
+
+and texpr_expr = texpr tpoly_expr
 
 and tfield_access =
 	| FInstance of tclass * tparams * tclass_field
