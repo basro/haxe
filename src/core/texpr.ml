@@ -90,8 +90,9 @@ let check_expr predicate e =
 		| TTry (e,catches) ->
 			predicate e || List.exists (fun (_,e) -> predicate e) catches
 
-let map_expr f e =
-	match e.eexpr with
+
+let map_poly_expr (f : 'a->'a)  e =
+	match e with
 	| TConst _
 	| TLocal _
 	| TBreak
@@ -101,60 +102,64 @@ let map_expr f e =
 		e
 	| TArray (e1,e2) ->
 		let e1 = f e1 in
-		{ e with eexpr = TArray (e1,f e2) }
+		TArray (e1,f e2)
 	| TBinop (op,e1,e2) ->
 		let e1 = f e1 in
-		{ e with eexpr = TBinop (op,e1,f e2) }
+		TBinop (op,e1,f e2)
 	| TFor (v,e1,e2) ->
 		let e1 = f e1 in
-		{ e with eexpr = TFor (v,e1,f e2) }
+		TFor (v,e1,f e2)
 	| TWhile (e1,e2,flag) ->
 		let e1 = f e1 in
-		{ e with eexpr = TWhile (e1,f e2,flag) }
+		TWhile (e1,f e2,flag)
 	| TThrow e1 ->
-		{ e with eexpr = TThrow (f e1) }
+		TThrow (f e1)
 	| TEnumParameter (e1,ef,i) ->
-		{ e with eexpr = TEnumParameter(f e1,ef,i) }
+		TEnumParameter(f e1,ef,i)
 	| TEnumIndex e1 ->
-		{ e with eexpr = TEnumIndex (f e1) }
+		TEnumIndex (f e1)
 	| TField (e1,v) ->
-		{ e with eexpr = TField (f e1,v) }
+		TField (f e1,v)
 	| TParenthesis e1 ->
-		{ e with eexpr = TParenthesis (f e1) }
+		TParenthesis (f e1)
 	| TUnop (op,pre,e1) ->
-		{ e with eexpr = TUnop (op,pre,f e1) }
+		TUnop (op,pre,f e1)
 	| TArrayDecl el ->
-		{ e with eexpr = TArrayDecl (List.map f el) }
+		TArrayDecl (List.map f el)
 	| TNew (t,pl,el) ->
-		{ e with eexpr = TNew (t,pl,List.map f el) }
+		TNew (t,pl,List.map f el)
 	| TBlock el ->
-		{ e with eexpr = TBlock (List.map f el) }
+		TBlock (List.map f el)
 	| TObjectDecl el ->
-		{ e with eexpr = TObjectDecl (List.map (fun (v,e) -> v, f e) el) }
+		TObjectDecl (List.map (fun (v,e) -> v, f e) el)
 	| TCall (e1,el) ->
 		let e1 = f e1 in
-		{ e with eexpr = TCall (e1, List.map f el) }
+		TCall (e1, List.map f el)
 	| TVar (v,eo) ->
-		{ e with eexpr = TVar (v, match eo with None -> None | Some e -> Some (f e)) }
+		TVar (v, match eo with None -> None | Some e -> Some (f e))
 	| TFunction fu ->
-		{ e with eexpr = TFunction { fu with tf_expr = f fu.tf_expr } }
+		TFunction { fu with tf_expr = f fu.tf_expr }
 	| TIf (ec,e1,e2) ->
 		let ec = f ec in
 		let e1 = f e1 in
-		{ e with eexpr = TIf (ec,e1,match e2 with None -> None | Some e -> Some (f e)) }
+		TIf (ec,e1,match e2 with None -> None | Some e -> Some (f e))
 	| TSwitch (e1,cases,def) ->
 		let e1 = f e1 in
 		let cases = List.map (fun (el,e2) -> List.map f el, f e2) cases in
-		{ e with eexpr = TSwitch (e1, cases, match def with None -> None | Some e -> Some (f e)) }
+		TSwitch (e1, cases, match def with None -> None | Some e -> Some (f e))
 	| TTry (e1,catches) ->
 		let e1 = f e1 in
-		{ e with eexpr = TTry (e1, List.map (fun (v,e) -> v, f e) catches) }
+		TTry (e1, List.map (fun (v,e) -> v, f e) catches)
 	| TReturn eo ->
-		{ e with eexpr = TReturn (match eo with None -> None | Some e -> Some (f e)) }
+		TReturn (match eo with None -> None | Some e -> Some (f e))
 	| TCast (e1,t) ->
-		{ e with eexpr = TCast (f e1,t) }
+		TCast (f e1,t)
 	| TMeta (m,e1) ->
-		 {e with eexpr = TMeta(m,f e1)}
+		TMeta(m,f e1)
+
+let map_expr f e =
+	let e2 = map_poly_expr f e.eexpr in
+	{e with eexpr = e2}
 
 let map_expr_type f ft fv e =
 	match e.eexpr with
