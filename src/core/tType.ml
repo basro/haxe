@@ -97,7 +97,7 @@ and tvar = {
 }
 
 and 'a tpoly_func = {
-	tf_args : (tvar * 'a option) list;
+	tf_args : (tvar * texpr option) list;
 	tf_type : t;
 	tf_expr : 'a;
 }

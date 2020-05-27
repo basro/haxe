@@ -91,15 +91,20 @@ let check_expr predicate e =
 			predicate e || List.exists (fun (_,e) -> predicate e) catches
 
 
-let map_poly_expr (f : 'a->'a)  e =
+let map_poly_expr (f : 'a->'b) (e:'a tpoly_expr) : 'b tpoly_expr =
 	match e with
-	| TConst _
-	| TLocal _
-	| TBreak
-	| TContinue
-	| TTypeExpr _
-	| TIdent _ ->
-		e
+	| TConst c ->
+		TConst c
+	| TLocal l -> 
+		TLocal l
+	| TBreak ->
+		TBreak
+	| TContinue ->
+		TContinue
+	| TTypeExpr m ->
+		TTypeExpr m
+	| TIdent i ->
+		TIdent i
 	| TArray (e1,e2) ->
 		let e1 = f e1 in
 		TArray (e1,f e2)
@@ -137,8 +142,8 @@ let map_poly_expr (f : 'a->'a)  e =
 		TCall (e1, List.map f el)
 	| TVar (v,eo) ->
 		TVar (v, match eo with None -> None | Some e -> Some (f e))
-	| TFunction fu ->
-		TFunction { fu with tf_expr = f fu.tf_expr }
+	| TFunction (fu:'a tpoly_func) ->
+		TFunction {fu with tf_expr= f fu.tf_expr}
 	| TIf (ec,e1,e2) ->
 		let ec = f ec in
 		let e1 = f e1 in
