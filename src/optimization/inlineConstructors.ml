@@ -24,6 +24,20 @@ open Typecore
 open Error
 open Globals
 
+let basDebugPrint2 ctx printer =
+	if Meta.has (Meta.Custom ":basdebug") ctx.curfield.cf_meta then begin
+		printer()
+	end
+
+let basDebugPrint title ctx e =
+	let printer () = 
+		print_endline title;
+		let se t = s_expr_ast true "\t" (s_type (print_context())) in (*s_expr_pretty true t true (s_type (print_context())) in*)
+		print_endline (se "\t" e);
+		let se t = s_expr_pretty true "\t" true (s_type (print_context())) in (*s_expr_pretty true t true (s_type (print_context())) in*)
+		print_endline (se "\t" e)
+	in basDebugPrint2 ctx printer
+
 (* INLINE CONSTRUCTORS *)
 
 (*
@@ -562,9 +576,24 @@ let type_tighten ctx e =
 					on_var_assign v.v_id
 				) ve
 			| TBinop(OpAssign, {eexpr = TLocal v}, rve) -> on_var_assign v.v_id; find_vars rve
-			| _ -> Type.iter find_vars e
+			| TBinop(OpAssignOp _, ({eexpr = TLocal v} as lve), rve) ->
+				let printer() =
+					print_endline "local opassignop";
+					print_endline (string_of_int v.v_id)
+				in
+				basDebugPrint2 ctx printer;
+				vars := IntMap.remove v.v_id !vars;
+				find_vars rve
+			| _ -> Type.iter find_vars e 
 		end
 	in find_vars e;
+	(let printer() =
+		print_endline "tight vars:";
+		IntMap.iter (fun id _ ->
+			print_endline (string_of_int id)
+		) !vars
+	in
+	basDebugPrint2 ctx printer);
 	let withcast (r:tighten_map_result) =
 		if Type.type_iseq_strict r.e.etype r.original_type
 			then r.e
@@ -627,15 +656,6 @@ let type_tighten ctx e =
 		{e=result; original_type=original_e.etype}
 	in
 	nocast (final_map e)
-
-let basDebugPrint title ctx e =
-	if Meta.has (Meta.Custom ":basdebug") ctx.curfield.cf_meta then begin
-		print_endline title;
-		let se t = s_expr_ast true "\t" (s_type (print_context())) in (*s_expr_pretty true t true (s_type (print_context())) in*)
-		print_endline (se "\t" e);
-		let se t = s_expr_pretty true "\t" true (s_type (print_context())) in (*s_expr_pretty true t true (s_type (print_context())) in*)
-		print_endline (se "\t" e)
-	end
 
 let inline_constructors ctx e = 
 	basDebugPrint "**** before tighten ****" ctx e;
