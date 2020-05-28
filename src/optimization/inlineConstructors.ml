@@ -83,7 +83,7 @@ and inline_var = {
 	mutable iv_closed : bool
 }
 
-let inline_constructors ctx e =
+let inline_constructors2 ctx e =
 	let inline_objs = ref IntMap.empty in
 	let vars = ref IntMap.empty in
 	let scoped_ivs = ref [] in
@@ -528,3 +528,119 @@ let inline_constructors ctx e =
 		) !vars;
 		e
 	end
+
+type tighten_map_result = {
+	e : texpr;
+	original_type : Type.t;
+}
+
+let type_tighten ctx e = 
+	let vars = ref IntMap.empty in
+	let on_var_decl vid = vars := IntMap.add vid 0 !vars in
+	let on_var_assign vid =
+		try
+			let count = IntMap.find vid !vars in
+			vars :=
+				if count == 0 then
+					IntMap.add vid 1 !vars
+				else
+					IntMap.remove vid !vars
+		with Not_found -> ()
+	in
+	let rec find_vars (e:texpr) =
+		begin match e.eexpr with
+			| TVar(v,ve) ->
+				begin match follow_without_null v.v_type with
+					| TInst _
+					| TAnon _
+					| TDynamic _ -> 
+						on_var_decl v.v_id;
+					| _ -> ()
+				end;
+				Option.may (fun ve -> 
+					find_vars ve;
+					on_var_assign v.v_id
+				) ve
+			| TBinop(OpAssign, {eexpr = TLocal v}, rve) -> on_var_assign v.v_id; find_vars rve
+			| _ -> Type.iter find_vars e
+		end
+	in find_vars e;
+	let withcast (r:tighten_map_result) =
+		if Type.type_iseq_strict r.e.etype r.original_type
+			then r.e
+			else mk_cast r.e r.original_type r.e.epos
+	in
+	let nocast (r:tighten_map_result) = r.e in
+	let rec final_map (original_e:texpr) : tighten_map_result =
+		let e : tighten_map_result tpoly_expr = Type.map_poly_expr final_map original_e.eexpr in
+		let result = try match e with
+			| TVar(v, Some {e=re}) when IntMap.mem v.v_id !vars ->
+				v.v_type <- re.etype;
+				mk (TVar (v, Some re)) original_e.etype original_e.epos
+			| TBinop(OpAssign, ({e={eexpr = TLocal v}} as lve), rve) when IntMap.mem v.v_id !vars ->
+				v.v_type <- rve.e.etype;
+				mk (TBinop (OpAssign, lve.e, rve.e)) lve.e.etype original_e.epos
+			| TLocal(v) when IntMap.mem v.v_id !vars ->
+				mk (TLocal v) v.v_type original_e.epos
+			| TField({e=fe}, fa) ->
+				begin match fa with
+					| FInstance _ | FAnon _ -> ()
+					| _ -> raise Not_found
+				end;
+				begin match fe.etype with 
+					| TInst (c,tl) ->
+						let fname = field_name fa in
+						let nfa, nfat =
+							let c, ft, f = raw_class_field (fun f -> f.cf_type) c tl fname in
+							match c, f.cf_params with
+								| Some (c,tl), [] -> FInstance (c,tl,f), ft
+								| _ -> raise Not_found
+						in
+						let nfat = apply_params c.cl_params tl nfat in
+						if has_mono nfat then begin
+							raise Not_found
+						end;
+						
+						mk (TField(fe,nfa)) nfat original_e.epos
+					| _ -> raise Not_found
+				end
+			| TCall({e={eexpr=TField(ethis,FInstance(cl, tp, ({cf_expr = Some ({eexpr = TFunction tf}); cf_kind=Method MethInline} as cf)))}}, cargs) -> 
+				let cargs = List.map nocast cargs in
+				begin match Inline.type_inline ctx cf tf ethis cargs original_e.etype None original_e.epos false with
+					| Some e ->
+						ctx.com.warning "inlined" original_e.epos;
+						e
+					| None -> raise Not_found
+				end
+			| TCall({e=ce}, cargs) ->
+				let ret_type = match ce.etype with
+					| TFun(argts, rett) -> rett
+					| _ -> raise Not_found
+				in
+				mk (TCall(ce, List.map nocast cargs)) ret_type original_e.epos
+			| _ ->
+				raise Not_found
+		with
+			| Not_found -> 
+				{original_e with eexpr=(Type.map_poly_expr withcast e)}
+		in
+		{e=result; original_type=original_e.etype}
+	in
+	nocast (final_map e)
+
+let basDebugPrint title ctx e =
+	if Meta.has (Meta.Custom ":basdebug") ctx.curfield.cf_meta then begin
+		print_endline title;
+		let se t = s_expr_ast true "\t" (s_type (print_context())) in (*s_expr_pretty true t true (s_type (print_context())) in*)
+		print_endline (se "\t" e);
+		let se t = s_expr_pretty true "\t" true (s_type (print_context())) in (*s_expr_pretty true t true (s_type (print_context())) in*)
+		print_endline (se "\t" e)
+	end
+
+let inline_constructors ctx e = 
+	basDebugPrint "**** before tighten ****" ctx e;
+	let e = type_tighten ctx e in
+	basDebugPrint "**** after tighten ****" ctx e;
+	let e = inline_constructors2 ctx e in
+	basDebugPrint "**** after ctor inline ****" ctx e;
+	e
