@@ -609,6 +609,10 @@ let type_tighten ctx e =
 			| TBinop(OpAssign, ({e={eexpr = TLocal v}} as lve), rve) when IntMap.mem v.v_id !vars ->
 				v.v_type <- rve.e.etype;
 				mk (TBinop (OpAssign, lve.e, rve.e)) lve.e.etype original_e.epos
+			| TBinop(OpAssign, lve, rve) ->
+				mk (TBinop (OpAssign, lve.e, (withcast rve))) lve.e.etype original_e.epos
+			| TBinop(OpAssignOp op, lve, rve) ->
+				mk (TBinop (OpAssignOp op, lve.e, (withcast rve))) lve.e.etype original_e.epos
 			| TLocal(v) when IntMap.mem v.v_id !vars ->
 				mk (TLocal v) v.v_type original_e.epos
 			| TField({e=fe}, fa) ->
@@ -637,7 +641,7 @@ let type_tighten ctx e =
 				let cargs = List.map nocast cargs in
 				begin match Inline.type_inline ctx cf tf ethis cargs original_e.etype None original_e.epos false with
 					| Some e ->
-						ctx.com.warning "inlined" original_e.epos;
+						(*ctx.com.warning "inlined" original_e.epos;*)
 						e
 					| None -> raise Not_found
 				end
