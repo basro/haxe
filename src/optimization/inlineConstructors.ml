@@ -625,8 +625,8 @@ let type_tighten ctx e =
 						let fname = field_name fa in
 						let nfa, nfat =
 							let c, ft, f = raw_class_field (fun f -> f.cf_type) c tl fname in
-							match c, f.cf_params with
-								| Some (c,tl), [] -> FInstance (c,tl,f), ft
+							match c, f.cf_params, f.cf_overloads with
+								| Some (c,tl), [], [] -> FInstance (c,tl,f), ft
 								| _ -> raise Not_found
 						in
 						let nfat = apply_params c.cl_params tl nfat in
