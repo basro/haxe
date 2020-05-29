@@ -549,6 +549,7 @@ type tighten_map_result = {
 }
 
 let type_tighten ctx e = 
+	if (Meta.has Meta.HasUntyped ctx.curfield.cf_meta) then e else
 	let vars = ref IntMap.empty in
 	let on_var_decl vid = vars := IntMap.add vid 0 !vars in
 	let on_var_assign vid =
@@ -576,7 +577,7 @@ let type_tighten ctx e =
 					on_var_assign v.v_id
 				) ve
 			| TBinop(OpAssign, {eexpr = TLocal v}, rve) -> on_var_assign v.v_id; find_vars rve
-			| TBinop(OpAssignOp _, ({eexpr = TLocal v} as lve), rve) ->
+			| TBinop(OpAssignOp _, {eexpr = TLocal v}, rve) ->
 				let printer() =
 					print_endline "local opassignop";
 					print_endline (string_of_int v.v_id)
