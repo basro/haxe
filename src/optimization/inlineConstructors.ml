@@ -616,7 +616,7 @@ let type_tighten ctx e =
 				mk (TBinop (OpAssignOp op, lve.e, (withcast rve))) lve.e.etype original_e.epos
 			| TLocal(v) when IntMap.mem v.v_id !vars ->
 				mk (TLocal v) v.v_type original_e.epos
-			| TField({e=fe}, fa) ->
+			(*| TField({e=fe}, fa) ->
 				begin match fa with
 					| FInstance _ | FAnon _ -> ()
 					| _ -> raise Not_found
@@ -637,7 +637,7 @@ let type_tighten ctx e =
 						
 						mk (TField(fe,nfa)) nfat original_e.epos
 					| _ -> raise Not_found
-				end
+				end*)
 			(*| TCall({e={eexpr=TField(ethis,FInstance(cl, tp, ({cf_expr = Some ({eexpr = TFunction tf}); cf_kind=Method MethInline} as cf)))}}, cargs) -> 
 				let cargs = List.map withcast cargs in
 				begin match Inline.type_inline ctx cf tf ethis cargs original_e.etype None original_e.epos false with
