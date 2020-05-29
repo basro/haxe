@@ -638,7 +638,7 @@ let type_tighten ctx e =
 						mk (TField(fe,nfa)) nfat original_e.epos
 					| _ -> raise Not_found
 				end
-			| TCall({e={eexpr=TField(ethis,FInstance(cl, tp, ({cf_expr = Some ({eexpr = TFunction tf}); cf_kind=Method MethInline} as cf)))}}, cargs) -> 
+			(*| TCall({e={eexpr=TField(ethis,FInstance(cl, tp, ({cf_expr = Some ({eexpr = TFunction tf}); cf_kind=Method MethInline} as cf)))}}, cargs) -> 
 				let cargs = List.map withcast cargs in
 				begin match Inline.type_inline ctx cf tf ethis cargs original_e.etype None original_e.epos false with
 					| Some e ->
@@ -651,7 +651,7 @@ let type_tighten ctx e =
 					| TFun(argts, rett) -> rett
 					| _ -> raise Not_found
 				in
-				mk (TCall(ce, List.map withcast cargs)) ret_type original_e.epos
+				mk (TCall(ce, List.map withcast cargs)) ret_type original_e.epos*)
 			| _ ->
 				raise Not_found
 		with
