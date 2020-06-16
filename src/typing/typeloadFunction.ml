@@ -45,12 +45,14 @@ let save_field_state ctx =
 	let old_ret = ctx.ret in
 	let old_fun = ctx.curfun in
 	let old_opened = ctx.opened in
+	let old_monos = ctx.monomorphs.perfunction in
 	let locals = ctx.locals in
 	(fun () ->
 		ctx.locals <- locals;
 		ctx.ret <- old_ret;
 		ctx.curfun <- old_fun;
 		ctx.opened <- old_opened;
+		ctx.monomorphs.perfunction <- old_monos;
 	)
 
 let type_var_field ctx t e stat do_display p =
@@ -91,13 +93,13 @@ let type_function_arg_value ctx t c do_display =
 			in
 			loop e
 
-let process_function_arg ctx n t c do_display p =
-	if starts_with n '$' then error "Function argument names starting with a dollar are not allowed" p;
+let process_function_arg ctx n t c do_display check_name p =
+	if check_name && starts_with n '$' then error "Function argument names starting with a dollar are not allowed" p;
 	type_function_arg_value ctx t c do_display
 
 let type_function ctx args ret fmode f do_display p =
 	let fargs = List.map2 (fun (n,c,t) ((_,pn),_,m,_,_) ->
-		let c = process_function_arg ctx n t c do_display pn in
+		let c = process_function_arg ctx n t c do_display true pn in
 		let v = add_local_with_origin ctx TVOArgument n t pn in
 		v.v_meta <- v.v_meta @ m;
 		if do_display && DisplayPosition.display_position#enclosed_in pn then
@@ -108,6 +110,7 @@ let type_function ctx args ret fmode f do_display p =
 	ctx.curfun <- fmode;
 	ctx.ret <- ret;
 	ctx.opened <- [];
+	ctx.monomorphs.perfunction <- [];
 	let e = match f.f_expr with
 		| None ->
 			if ctx.com.display.dms_error_policy = EPIgnore then
@@ -221,6 +224,7 @@ let type_function ctx args ret fmode f do_display p =
 		| _ -> e
 	in
 	List.iter (fun r -> r := Closed) ctx.opened;
+	List.iter (fun (m,p) -> safe_mono_close ctx m p) ctx.monomorphs.perfunction;
 	if is_position_debug then print_endline ("typing:\n" ^ (Texpr.dump_with_pos "" e));
 	e , fargs
 

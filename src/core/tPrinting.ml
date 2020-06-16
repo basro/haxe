@@ -39,7 +39,12 @@ let rec s_type ctx t =
 			with Not_found ->
 				let id = List.length !ctx in
 				ctx := (t,id) :: !ctx;
-				Printf.sprintf "Unknown<%d>" id
+			let s_const = match !monomorph_classify_constraints_ref r with
+				| CUnknown -> ""
+				| CTypes tl -> " : " ^ String.concat " & " (List.map (fun (t,_) -> s_type ctx t) tl)
+				| CStructural(fields,_) -> " : " ^ s_type ctx (mk_anon ~fields (ref Closed))
+			in
+				Printf.sprintf "Unknown<%d>%s" id s_const
 			end
 		| Some t -> s_type ctx t)
 	| TEnum (e,tl) ->
@@ -75,7 +80,7 @@ let rec s_type ctx t =
 			| AbstractStatics a -> Printf.sprintf "{ AbstractStatics %s }" (s_type_path a.a_path)
 			| _ ->
 				let fl = PMap.fold (fun f acc -> ((if Meta.has Meta.Optional f.cf_meta then " ?" else " ") ^ f.cf_name ^ " : " ^ s_type ctx f.cf_type) :: acc) a.a_fields [] in
-				"{" ^ (if not (is_closed a) then "+" else "") ^  String.concat "," fl ^ " }"
+				"{" ^ String.concat "," fl ^ " }"
 		end
 	| TDynamic t2 ->
 		"Dynamic" ^ s_type_params ctx (if t == t2 then [] else [t2])
@@ -100,6 +105,13 @@ and s_fun ctx t void =
 and s_type_params ctx = function
 	| [] -> ""
 	| l -> "<" ^ String.concat ", " (List.map (s_type ctx) l) ^ ">"
+
+and s_constraint = function
+	| MMono(m,_) -> Printf.sprintf "MMono %s" (s_type_kind (TMono m))
+	| MField cf -> Printf.sprintf "MField %s" cf.cf_name
+	| MType(t,_) -> Printf.sprintf "MType %s" (s_type_kind t)
+	| MOpenStructure -> "MOpenStructure"
+	| MEmptyStructure -> "MEmptyStructure"
 
 let s_access is_read = function
 	| AccNormal -> "default"

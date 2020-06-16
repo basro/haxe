@@ -336,7 +336,7 @@ let rec type_ident_raise ctx i p mode =
 		(match v.v_extra with
 		| Some ve ->
 			let (params,e) = (ve.v_params,ve.v_expr) in
-			let t = monomorphs params v.v_type in
+			let t = apply_params params (Monomorph.spawn_constrained_monos (fun t -> t) params) v.v_type in
 			(match e with
 			| Some ({ eexpr = TFunction f } as e) when ctx.com.display.dms_inline ->
 				begin match mode with
@@ -417,10 +417,8 @@ let rec type_ident_raise ctx i p mode =
 					try
 						let ef = PMap.find i e.e_constrs in
 						let et = type_module_type ctx t None p in
-						let monos = List.map (fun _ -> mk_mono()) e.e_params in
-						let monos2 = List.map (fun _ -> mk_mono()) ef.ef_params in
 						ImportHandling.mark_import_position ctx pt;
-						wrap (mk (TField (et,FEnum (e,ef))) (enum_field_type ctx e ef monos monos2 p) p)
+						wrap (mk (TField (et,FEnum (e,ef))) (enum_field_type ctx e ef p) p)
 					with
 						Not_found -> loop l
 		in
@@ -453,6 +451,13 @@ let unify_int ctx e k =
 		match follow t with
 		| TAnon a ->
 			(try is_dynamic (PMap.find f a.a_fields).cf_type with Not_found -> false)
+		| TMono m ->
+			begin match Monomorph.classify_constraints m with
+			| CStructural(fields,_) ->
+				(try is_dynamic (PMap.find f fields).cf_type with Not_found -> false)
+			| _ ->
+				true
+			end
 		| TInst (c,tl) ->
 			(try is_dynamic (apply_params c.cl_params tl ((let _,t,_ = Type.class_field c tl f in t))) with Not_found -> false)
 		| _ ->
@@ -479,7 +484,8 @@ let unify_int ctx e k =
 		match follow t with
 		| TMono _ | TDynamic _ -> maybe_dynamic_mono e
 		(* we might have inferenced a tmono into a single field *)
-		| TAnon a when !(a.a_status) = Opened -> maybe_dynamic_mono e
+		(* TODO: check what this did exactly *)
+		(* | TAnon a when !(a.a_status) = Opened -> maybe_dynamic_mono e *)
 		| _ -> false
 	in
 	match k with
@@ -633,7 +639,7 @@ let rec type_binop ctx op e1 e2 is_assign_op with_type p =
 			]) t p
 		| AKUsing(ef,c,cf,et,_) ->
 			(* abstract setter + getter *)
-			let ta = match c.cl_kind with KAbstractImpl a -> TAbstract(a, List.map (fun _ -> mk_mono()) a.a_params) | _ -> die "" __LOC__ in
+			let ta = match c.cl_kind with KAbstractImpl a -> TAbstract(a,Monomorph.spawn_constrained_monos (fun t -> t) a.a_params) | _ -> die "" __LOC__ in
 			let ret = match follow ef.etype with
 				| TFun([_;_],ret) -> ret
 				| _ -> error "Invalid field type for abstract setter" p
@@ -1012,7 +1018,7 @@ and type_binop2 ?(abstract_overload_only=false) ctx op (e1 : texpr) (e2 : Ast.ex
 					| TFun([(_,_,t1);(_,_,t2)],tret) ->
 						let check e1 e2 swapped =
 							let map_arguments () =
-								let monos = List.map (fun _ -> mk_mono()) cf.cf_params in
+								let monos = Monomorph.spawn_constrained_monos (fun t -> t) cf.cf_params in
 								let map t = map (apply_params cf.cf_params monos t) in
 								let t1 = map t1 in
 								let t2 = map t2 in
@@ -1029,7 +1035,6 @@ and type_binop2 ?(abstract_overload_only=false) ctx op (e1 : texpr) (e2 : Ast.ex
 								Type.type_eq EqStrict e2.etype t2;
 								AbstractCast.cast_or_unify_raise ctx t1 e1 p,e2
 							end in
-							check_constraints ctx "" cf.cf_params monos (apply_params a.a_params tl) false cf.cf_pos;
 							let check_null e t = if is_eq_op then match e.eexpr with
 								| TConst TNull when not (is_explicit_null t) -> raise (Unify_error [])
 								| _ -> ()
@@ -1398,7 +1403,7 @@ and type_access ctx e p mode =
 			| TTypeExpr (TClassDecl c) ->
 				if mode = MSet then error "Cannot set constructor" p;
 				if mode = MCall then error ("Cannot call constructor like this, use 'new " ^ (s_type_path c.cl_path) ^ "()' instead") p;
-				let monos = List.map (fun _ -> mk_mono()) (match c.cl_kind with KAbstractImpl a -> a.a_params | _ -> c.cl_params) in
+				let monos = Monomorph.spawn_constrained_monos (fun t -> t) (match c.cl_kind with KAbstractImpl a -> a.a_params | _ -> c.cl_params) in
 				let ct, cf = get_constructor ctx c monos p in
 				check_constructor_access ctx c cf p;
 				let args = match follow ct with TFun(args,ret) -> args | _ -> die "" __LOC__ in
@@ -1692,7 +1697,6 @@ and type_object_decl ctx fl with_type p =
 	| ODKWithStructure a when PMap.is_empty a.a_fields && !dynamic_parameter = None -> type_plain_fields()
 	| ODKWithStructure a ->
 		let t, fl = type_fields a.a_fields in
-		if !(a.a_status) = Opened then a.a_status := Closed;
 		mk (TObjectDecl fl) t p
 	| ODKWithClass (c,tl) ->
 		let t,ctor = get_constructor ctx c tl p in
@@ -1794,14 +1798,11 @@ and type_new ctx path el with_type force_inline p =
 		(* Try to infer generic parameters from the argument list (issue #2044) *)
 		begin match resolve_typedef (Typeload.load_type_def ctx p (fst path)) with
 		| TClassDecl ({cl_constructor = Some cf} as c) ->
-			let monos = List.map (fun _ -> mk_mono()) c.cl_params in
+			let monos = Monomorph.spawn_constrained_monos (fun t -> t) c.cl_params in
 			let ct, f = get_constructor ctx c monos p in
 			ignore (unify_constructor_call c monos f ct);
 			begin try
-				let t = Generic.build_generic ctx c p monos in
-				let map = apply_params c.cl_params monos in
-				check_constraints ctx (s_type_path c.cl_path) c.cl_params monos map true p;
-				t
+				Generic.build_generic ctx c p monos
 			with Generic.Generic_Exception _ as exc ->
 				(* If we have an expected type, just use that (issue #3804) *)
 				begin match with_type with
@@ -2017,7 +2018,6 @@ and type_local_function ctx kind f with_type p =
 		if name = None then display_error ctx "Type parameters not supported in unnamed local functions" p;
 		if with_type <> WithType.NoValue then error "Type parameters are not supported for rvalue functions" p
 	end;
-	List.iter (fun tp -> if tp.tp_constraints <> None then display_error ctx "Type parameter constraints are not supported for local functions" p) f.f_params;
 	let v,pname = (match name with
 		| None -> None,p
 		| Some (v,pn) -> Some v,pn
@@ -2404,7 +2404,7 @@ and type_call_target ctx e with_type inline p =
 and type_call ?(mode=MGet) ctx e el (with_type:WithType.t) inline p =
 	let def () =
 		let e = type_call_target ctx e with_type inline p in
-		build_call ~mode ctx e el with_type p
+		build_call ~mode ctx e el with_type p;
 	in
 	match e, el with
 	| (EConst (Ident "trace"),p) , e :: el ->
@@ -2446,10 +2446,16 @@ and type_call ?(mode=MGet) ctx e el (with_type:WithType.t) inline p =
 		e
 	| (EField(e,"match"),p), [epat] ->
 		let et = type_expr ctx e WithType.value in
-		(match follow et.etype with
-			| TEnum _ ->
-				Matcher.Match.match_expr ctx e [[epat],None,Some (EConst(Ident "true"),p),p] (Some (Some (EConst(Ident "false"),p),p)) (WithType.with_type ctx.t.tbool) true p
-			| _ -> def ())
+		let is_enum_match = match follow et.etype with
+			| TEnum _ -> true
+			| TAbstract _ as t when (match Abstract.follow_with_abstracts_forward t with TEnum _ -> true | _ -> false) ->
+				(try ignore (type_field (TypeFieldConfig.create true) ctx et "match" p mode); false with _ -> true)
+			| _ -> false
+		in
+		if is_enum_match then
+			Matcher.Match.match_expr ctx e [[epat],None,Some (EConst(Ident "true"),p),p] (Some (Some (EConst(Ident "false"),p),p)) (WithType.with_type ctx.t.tbool) true p
+		else
+			def ()
 	| (EConst (Ident "__unprotect__"),_) , [(EConst (String _),_) as e] ->
 		let e = type_expr ctx e WithType.value in
 		if Common.platform ctx.com Flash then
@@ -2695,6 +2701,9 @@ let rec create com =
 		opened = [];
 		vthis = None;
 		in_call_args = false;
+		monomorphs = {
+			perfunction = [];
+		};
 		on_error = (fun ctx msg p -> ctx.com.error msg p);
 		memory_marker = Typecore.memory_marker;
 	} in

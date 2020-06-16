@@ -138,7 +138,10 @@ class Printer {
 			case TParent(ct): "(" + printComplexType(ct) + ")";
 			case TOptional(ct): "?" + printComplexType(ct);
 			case TNamed(n, ct): n + ":" + printComplexType(ct);
-			case TExtend(tpl, fields): '{> ${tpl.map(printTypePath).join(" >, ")}, ${fields.map(printField).join(", ")} }';
+			case TExtend(tpl, fields):
+				var types = [for (t in tpl) "> " + printTypePath(t) + ", "].join("");
+				var fields = [for (f in fields) printField(f) + "; "].join("");
+				'{${types}${fields}}';
 			case TIntersection(tl): tl.map(printComplexType).join(" & ");
 		}
 
@@ -183,7 +186,8 @@ class Printer {
 	}
 
 	public function printTypeParamDecl(tpd:TypeParamDecl)
-		return tpd.name
+		return (tpd.meta != null && tpd.meta.length > 0 ? tpd.meta.map(printMetadata).join(" ") + " " : "")
+			+ tpd.name
 			+ (tpd.params != null && tpd.params.length > 0 ? "<" + tpd.params.map(printTypeParamDecl).join(", ") + ">" : "")
 			+ (tpd.constraints != null && tpd.constraints.length > 0 ? ":(" + tpd.constraints.map(printComplexType).join(", ") + ")" : "");
 

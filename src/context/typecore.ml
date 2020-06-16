@@ -132,10 +132,16 @@ and typer = {
 	mutable opened : anon_status ref list;
 	mutable vthis : tvar option;
 	mutable in_call_args : bool;
+	mutable monomorphs : monomorphs;
 	(* events *)
 	mutable on_error : typer -> string -> pos -> unit;
 	memory_marker : float array;
 }
+
+and monomorphs = {
+	mutable perfunction : (tmono * pos) list;
+}
+
 exception Forbid_package of (string * path * pos) * pos list * string
 
 exception WithTypeError of error_msg * pos
@@ -512,6 +518,13 @@ let merge_core_doc ctx mt =
 			| _ -> ()
 		end
 	| _ -> ())
+
+let safe_mono_close ctx m p =
+	try
+		Monomorph.close m
+	with
+		Unify_error l ->
+			raise_or_display ctx l p
 
 (* -------------- debug functions to activate when debugging typer passes ------------------------------- *)
 (*/*

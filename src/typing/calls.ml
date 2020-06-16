@@ -232,7 +232,8 @@ let unify_call_args ctx el args r p inline force_inline =
 
 let unify_field_call ctx fa el args ret p inline =
 	let map_cf cf0 map cf =
-		let t = map (monomorphs cf.cf_params cf.cf_type) in
+		let monos = Monomorph.spawn_constrained_monos map cf.cf_params in
+		let t = map (apply_params cf.cf_params monos cf.cf_type) in
 		begin match cf.cf_expr,cf.cf_kind with
 		| None,Method MethInline when not ctx.com.config.pf_overload ->
 			(* This is really awkward and shouldn't be here. We'll keep it for
@@ -260,7 +261,10 @@ let unify_field_call ctx fa el args ret p inline =
 			let cfl = if cf.cf_name = "new" || not (Meta.has Meta.Overload cf.cf_meta && ctx.com.config.pf_overload) then
 				List.map (map_cf cf map) cf.cf_overloads
 			else
-				List.map (fun (t,cf) -> map (monomorphs cf.cf_params t),cf) (Overloads.get_overloads c cf.cf_name)
+				List.map (fun (t,cf) ->
+					let monos = Monomorph.spawn_constrained_monos map cf.cf_params in
+					map (apply_params cf.cf_params monos t),cf
+				) (Overloads.get_overloads c cf.cf_name)
 			in
 			(TFun(args,ret),cf) :: cfl,Some c,cf,(fun cf -> FInstance(c,tl,cf))
 		| FClosure(co,cf) ->
@@ -354,7 +358,8 @@ let type_generic_function ctx (e,fa) el ?(using_param=None) with_type p =
 		| _ -> die "" __LOC__
 	in
 	if cf.cf_params = [] then error "Function has no type parameters and cannot be generic" p;
-	let monos = List.map (fun _ -> mk_mono()) cf.cf_params in
+	let map = if stat then (fun t -> t) else apply_params c.cl_params tl in
+	let monos = Monomorph.spawn_constrained_monos map cf.cf_params in
 	let map_monos t = apply_params cf.cf_params monos t in
 	let map t = if stat then map_monos t else apply_params c.cl_params tl (map_monos t) in
 	let t = map cf.cf_type in
@@ -374,11 +379,10 @@ let type_generic_function ctx (e,fa) el ?(using_param=None) with_type p =
 		| _ -> ()
 	end;
 	let el,_ = unify_call_args ctx el args ret p false false in
-	begin try
-		check_constraints ctx cf.cf_name cf.cf_params monos map false p
-	with Unify_error l ->
-		display_error ctx (error_msg (Unify l)) p
-	end;
+	List.iter (fun t -> match follow t with
+		| TMono m -> safe_mono_close ctx m p
+		| _ -> ()
+	) monos;
 	let el = match using_param with None -> el | Some e -> e :: el in
 	(try
 		let gctx = Generic.make_generic ctx cf.cf_params monos p in
@@ -526,7 +530,7 @@ let rec acc_get ctx g p =
 				let f = match c.cl_kind with
 					| KAbstractImpl a when Meta.has Meta.Enum a.a_meta ->
 						(* Enum abstracts have to apply their type parameters because they are basically statics with type params (#8700). *)
-						let monos = List.map (fun _ -> mk_mono()) a.a_params in
+						let monos = Monomorph.spawn_constrained_monos (fun t -> t) a.a_params in
 						apply_params a.a_params monos;
 					| _ -> (fun t -> t)
 				in

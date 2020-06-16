@@ -4,6 +4,7 @@ open TType
 
 let monomorph_create_ref : (unit -> tmono) ref = ref (fun _ -> die "" __LOC__)
 let monomorph_bind_ref : (tmono -> t -> unit) ref = ref (fun _ _ -> die "" __LOC__)
+let monomorph_classify_constraints_ref : (tmono -> tmono_constraint_kind) ref = ref (fun _ -> die "" __LOC__)
 
 let has_meta m ml = List.exists (fun (m2,_,_) -> m = m2) ml
 let get_meta m ml = List.find (fun (m2,_,_) -> m = m2) ml
@@ -256,19 +257,40 @@ let map loop t =
 		TFun (List.map (fun (s,o,t) -> s, o, loop t) tl,loop r)
 	| TAnon a ->
 		let fields = PMap.map (fun f -> { f with cf_type = loop f.cf_type }) a.a_fields in
-		begin match !(a.a_status) with
-			| Opened ->
-				a.a_fields <- fields;
-				t
-			| _ ->
-				mk_anon ~fields a.a_status
-		end
+		mk_anon ~fields a.a_status
 	| TLazy f ->
 		let ft = lazy_type f in
 		let ft2 = loop ft in
 		if ft == ft2 then t else ft2
 	| TDynamic t2 ->
 		if t == t2 then	t else TDynamic (loop t2)
+
+let iter loop t =
+	match t with
+	| TMono r ->
+		(match r.tm_type with
+		| None -> ()
+		| Some t -> loop t)
+	| TEnum (_,[]) | TInst (_,[]) | TType (_,[]) ->
+		()
+	| TEnum (e,tl) ->
+		List.iter loop tl
+	| TInst (c,tl) ->
+		List.iter loop tl
+	| TType (t2,tl) ->
+		List.iter loop tl
+	| TAbstract (a,tl) ->
+		List.iter loop tl
+	| TFun (tl,r) ->
+		List.iter (fun (_,_,t) -> loop t) tl;
+		loop r
+	| TAnon a ->
+		PMap.iter (fun _ f -> loop f.cf_type) a.a_fields
+	| TLazy f ->
+		let ft = lazy_type f in
+		loop ft
+	| TDynamic t2 ->
+		if t != t2 then	loop t2
 
 let duplicate t =
 	let monos = ref [] in
@@ -386,13 +408,7 @@ let apply_params ?stack cparams params t =
 			TFun (List.map (fun (s,o,t) -> s, o, loop t) tl,loop r)
 		| TAnon a ->
 			let fields = PMap.map (fun f -> { f with cf_type = loop f.cf_type }) a.a_fields in
-			begin match !(a.a_status) with
-				| Opened ->
-					a.a_fields <- fields;
-					t
-				| _ ->
-					mk_anon ~fields a.a_status
-			end
+			mk_anon ~fields a.a_status
 		| TLazy f ->
 			let ft = lazy_type f in
 			let ft2 = loop ft in
@@ -570,8 +586,6 @@ let concat e1 e2 =
 		| _ , _ -> TBlock [e1;e2]
 	) in
 	mk e e2.etype (punion e1.epos e2.epos)
-
-let is_closed a = !(a.a_status) <> Opened
 
 let type_of_module_type = function
 	| TClassDecl c -> TInst (c,List.map snd c.cl_params)

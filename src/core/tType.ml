@@ -45,7 +45,20 @@ type t =
 
 and tmono = {
 	mutable tm_type : t option;
+	mutable tm_constraints : tmono_constraint list;
 }
+
+and tmono_constraint =
+	| MMono of tmono * string option
+	| MField of tclass_field
+	| MType of t * string option
+	| MOpenStructure
+	| MEmptyStructure
+
+and tmono_constraint_kind =
+	| CUnknown
+	| CStructural of (string,tclass_field) PMap.t * bool
+	| CTypes of (t * string option) list
 
 and tlazy =
 	| LAvailable of t
@@ -106,7 +119,6 @@ and tfunc = {
 
 and anon_status =
 	| Closed
-	| Opened
 	| Const
 	| Extend of t list
 	| Statics of tclass
