@@ -262,7 +262,7 @@ module IterationKind = struct
 			it_expr = e1;
 		}
 
-	let to_texpr ctx v iterator e2 p =
+	let to_texpr ?(no_tfor=false) ctx v iterator e2 p =
 		let e1,pt = iterator.it_expr,iterator.it_type in
 		let t_void = ctx.t.tvoid in
 		let t_int = ctx.t.tint in
@@ -374,7 +374,12 @@ module IterationKind = struct
 			gen_int_iter e1 pt f_next f_length
 		| IteratorIterator ->
 			begin try optimize_for_loop_iterator ctx v e1 e2 p
-			with Exit -> mk (TFor(v,e1,e2)) t_void p end
+			with Exit ->
+				if no_tfor then
+					for_remap ctx.com.basic v e1 e2 p
+				else
+					mk (TFor(v,e1,e2)) t_void p
+			end
 		| IteratorGenericStack c ->
 			let tcell = (try (PMap.find "head" c.cl_fields).cf_type with Not_found -> die "" __LOC__) in
 			let cell = gen_local ctx tcell p in
