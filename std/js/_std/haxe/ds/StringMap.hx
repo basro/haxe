@@ -26,6 +26,28 @@ import js.lib.Object;
 import haxe.Constraints.IMap;
 import haxe.DynamicAccess;
 
+private class StringMapIterator<T> {
+	var map:StringMap<T>;
+	var keys:Array<String>;
+	var index:Int;
+	var count:Int;
+
+	public inline function new(map:StringMap<T>, keys:Array<String>) {
+		this.map = map;
+		this.keys = keys;
+		this.index = 0;
+		this.count = keys.length;
+	}
+
+	public inline function hasNext() {
+		return index < count;
+	}
+
+	public inline function next() {
+		return map.get(keys[index++]);
+	}
+}
+
 #if (js_es >= 5)
 @:coreApi class StringMap<T> implements IMap<String, T> {
 	var h:Dynamic;
@@ -88,12 +110,8 @@ import haxe.DynamicAccess;
 		};
 	}
 
-	static function valueIterator<T>(h:Dynamic):Iterator<T> {
-		var keys = Object.keys(h), len = keys.length, idx = 0;
-		return {
-			hasNext: () -> idx < len,
-			next: () -> h[cast keys[idx++]]
-		};
+	inline function valueIterator(h:Dynamic):Iterator<T> {
+		return new StringMapIterator(this, Object.keys(h));
 	}
 
 	static function kvIterator<T>(h:Dynamic):KeyValueIterator<String, T> {
@@ -121,28 +139,6 @@ import haxe.DynamicAccess;
 	}
 }
 #else
-private class StringMapIterator<T> {
-	var map:StringMap<T>;
-	var keys:Array<String>;
-	var index:Int;
-	var count:Int;
-
-	public inline function new(map:StringMap<T>, keys:Array<String>) {
-		this.map = map;
-		this.keys = keys;
-		this.index = 0;
-		this.count = keys.length;
-	}
-
-	public inline function hasNext() {
-		return index < count;
-	}
-
-	public inline function next() {
-		return map.get(keys[index++]);
-	}
-}
-
 @:coreApi class StringMap<T> implements haxe.Constraints.IMap<String, T> {
 	private var h:Dynamic;
 	private var rh:Dynamic;
