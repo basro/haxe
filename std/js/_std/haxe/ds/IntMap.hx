@@ -71,17 +71,17 @@ private class IntMapIterator<T> {
 	}
 
 	public function keys():Iterator<Int> {
-		return arrayKeys().iterator();
+		return (inline objectKeys(h)).iterator();
 	}
 
-	inline function arrayKeys():Array<Int> {
+	static function objectKeys(obj:Dynamic) : Array<Int> {
 		var a = [];
-		js.Syntax.code("for( var key in {0} ) if({0}.hasOwnProperty(key)) {1}.push(key | 0)", h, a);
+		js.Syntax.code("for( var key in {0} ) if({0}.hasOwnProperty(key)) {1}.push(key | 0)", obj, a);
 		return a;
 	}
 
 	public inline function iterator():Iterator<T> {
-		return new IntMapIterator(this, arrayKeys());
+		return new IntMapIterator(this, objectKeys(h));
 	}
 
 	@:runtime public inline function keyValueIterator():KeyValueIterator<Int, T> {
